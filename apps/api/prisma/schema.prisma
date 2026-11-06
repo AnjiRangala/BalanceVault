@@ -1,0 +1,200 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  ACCOUNT_HOLDER
+  AUDITOR
+}
+
+enum AccountType {
+  PERSONAL
+  BUSINESS
+  SYSTEM_CLEARING
+}
+
+enum AccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum JournalTransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  TRANSFER
+}
+
+enum JournalTransactionStatus {
+  PENDING
+  POSTED
+}
+
+enum TransactionAttemptStatus {
+  RECEIVED
+  POSTED
+  REFUSED
+}
+
+model User {
+  id                   String                @id @default(uuid()) @db.Uuid
+  email                String                @unique
+  passwordHash         String
+  role                 UserRole              @default(ACCOUNT_HOLDER)
+  isActive             Boolean               @default(true)
+  createdAt            DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime              @updatedAt @db.Timestamptz(6)
+  accountPermissions   AccountPermission[]
+  journalTransactions  JournalTransaction[]  @relation("JournalActor")
+  idempotencyRecords   IdempotencyRecord[]
+  transactionAttempts  TransactionAttempt[]  @relation("AttemptActor")
+  auditLogs            AuditLog[]             @relation("AuditActor")
+
+  @@index([role, isActive])
+}
+
+/// Customer account access is granted through AccountPermission. Create the account
+/// and at least one ACCOUNT_HOLDER permission atomically. System clearing accounts
+/// use stable systemCode values such as CLEARING_DEPOSIT_INR and
+/// CLEARING_WITHDRAWAL_INR and must not receive customer permissions.
+model Account {
+  id                    String                @id @default(uuid()) @db.Uuid
+  accountNumber         String                @unique
+  /// Stable identifier for a system account, e.g. CLEARING_DEPOSIT_INR.
+  /// Customer accounts leave this null. System accounts are not granted to users.
+  systemCode            String?               @unique
+  type                  AccountType
+  status                AccountStatus         @default(ACTIVE)
+  balancePaise          BigInt                @default(0)
+  currencyCode          String                @default("INR") @db.Char(3)
+  createdAt             DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime              @updatedAt @db.Timestamptz(6)
+  permissions           AccountPermission[]
+  ledgerEntries         LedgerEntry[]
+  sourceAttempts        TransactionAttempt[]  @relation("AttemptSourceAccount")
+  destinationAttempts   TransactionAttempt[]  @relation("AttemptDestinationAccount")
+
+  @@index([type, status])
+  @@index([status, createdAt])
+}
+
+model AccountPermission {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @db.Uuid
+  accountId    String   @db.Uuid
+  /// All capabilities are denied by default. Account creation must atomically
+  /// grant canView=true to the initial authorized ACCOUNT_HOLDER.
+  canView      Boolean  @default(false)
+  canDeposit   Boolean  @default(false)
+  canWithdraw  Boolean  @default(false)
+  canTransfer  Boolean  @default(false)
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  account      Account  @relation(fields: [accountId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([userId, accountId])
+  @@index([accountId])
+}
+
+model JournalTransaction {
+  id                    String                      @id @default(uuid()) @db.Uuid
+  type                  JournalTransactionType
+  status                JournalTransactionStatus    @default(PENDING)
+  actorId               String                      @db.Uuid
+  reference             String?
+  description           String?
+  createdAt             DateTime                    @default(now()) @db.Timestamptz(6)
+  actor                 User                        @relation("JournalActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  entries               LedgerEntry[]
+  idempotencyResult     IdempotencyRecord?          @relation("IdempotencyResult")
+
+  @@index([actorId, createdAt])
+  @@index([type, status, createdAt])
+  @@index([reference])
+}
+
+model LedgerEntry {
+  id                    String             @id @default(uuid()) @db.Uuid
+  journalTransactionId  String             @db.Uuid
+  accountId             String             @db.Uuid
+  amountPaise           BigInt
+  postingSequence       Int
+  /// Per-account statement order, allocated under the account row lock inside
+  /// the financial posting transaction. Never allocate this outside that transaction.
+  accountPostingSequence BigInt
+  createdAt             DateTime           @default(now()) @db.Timestamptz(6)
+  journalTransaction   JournalTransaction @relation(fields: [journalTransactionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  account               Account            @relation(fields: [accountId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([journalTransactionId, postingSequence])
+  @@unique([accountId, accountPostingSequence])
+  @@index([accountId, createdAt, id])
+  @@index([journalTransactionId])
+}
+
+/// Retain expired records, including request hashes and original result references.
+/// An expired key must never authorize re-execution: return its original result for
+/// a matching retry or reject the request. Do not delete records automatically.
+model IdempotencyRecord {
+  id                         String                @id @default(uuid()) @db.Uuid
+  userId                     String                @db.Uuid
+  idempotencyKey             String
+  canonicalRequestHash       String                @db.Char(64)
+  responseStatus             Int?
+  responseBody               Json?                 @db.JsonB
+  resultJournalTransactionId String?               @unique @db.Uuid
+  createdAt                  DateTime              @default(now()) @db.Timestamptz(6)
+  expiresAt                  DateTime              @db.Timestamptz(6)
+  user                       User                  @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  resultJournalTransaction   JournalTransaction?  @relation("IdempotencyResult", fields: [resultJournalTransactionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  transactionAttempts        TransactionAttempt[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([expiresAt])
+  @@index([createdAt])
+}
+
+model TransactionAttempt {
+  id                     String                    @id @default(uuid()) @db.Uuid
+  actorId                String                    @db.Uuid
+  sourceAccountId        String?                   @db.Uuid
+  destinationAccountId   String?                   @db.Uuid
+  type                   JournalTransactionType
+  requestedAmountPaise   BigInt
+  status                 TransactionAttemptStatus  @default(RECEIVED)
+  refusalReason          String?
+  idempotencyRecordId    String?                   @db.Uuid
+  createdAt              DateTime                  @default(now()) @db.Timestamptz(6)
+  actor                  User                      @relation("AttemptActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceAccount          Account?                  @relation("AttemptSourceAccount", fields: [sourceAccountId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  destinationAccount     Account?                  @relation("AttemptDestinationAccount", fields: [destinationAccountId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  idempotencyRecord      IdempotencyRecord?        @relation(fields: [idempotencyRecordId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([actorId, createdAt])
+  @@index([sourceAccountId, createdAt])
+  @@index([destinationAccountId, createdAt])
+  @@index([idempotencyRecordId])
+  @@index([status, createdAt])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorId     String   @db.Uuid
+  action      String
+  entityType  String
+  entityId    String   @db.Uuid
+  metadata    Json?    @db.JsonB
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  actor       User     @relation("AuditActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@index([action, createdAt])
+}
