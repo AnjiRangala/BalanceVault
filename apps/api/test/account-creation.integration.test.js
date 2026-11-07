@@ -7,6 +7,7 @@ import jwt from 'jsonwebtoken';
 import pg from 'pg';
 import { createApp } from '../src/app.js';
 import { JWT_AUDIENCE, JWT_ISSUER } from '../src/config/auth.js';
+import { verifyRuntimeDatabaseIdentity } from '../src/config/runtime.js';
 
 if ([...(process.env.JWT_ACCESS_SECRET ?? '')].length < 32) {
   process.env.JWT_ACCESS_SECRET = 'balancevault-account-db-test-secret-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -104,6 +105,7 @@ test('account creation function privileges and authenticated HTTP creation are e
   }
 
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: runtimeDatabaseUrl }) });
+  await verifyRuntimeDatabaseIdentity(prisma);
   const instance = await listen(createApp({ prismaClient: prisma }));
   const accountNumber = `BV-${randomUUID()}`;
   const accessToken = jwt.sign({ role: 'ADMIN' }, process.env.JWT_ACCESS_SECRET, {

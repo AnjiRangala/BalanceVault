@@ -81,7 +81,7 @@ export function validateRuntimeConfig(env = process.env) {
 export async function verifyRuntimeDatabaseIdentity(prismaClient) {
   const [identity] = await prismaClient.$queryRaw`
     SELECT
-      pg_catalog.pg_has_role(session_user, 'balancevault_runtime', 'MEMBER') AS is_runtime_member,
+      pg_catalog.pg_has_role(session_user, 'balancevault_runtime', 'USAGE') AS has_runtime_privileges,
       COALESCE((SELECT r.rolsuper FROM pg_catalog.pg_roles r WHERE r.rolname = session_user), true) AS is_superuser,
       pg_catalog.pg_has_role(session_user, 'balancevault_migration_owner', 'MEMBER') AS is_migration_member,
       pg_catalog.pg_has_role(session_user, 'balancevault_posting_owner', 'MEMBER') AS is_posting_owner_member,
@@ -101,9 +101,9 @@ export async function verifyRuntimeDatabaseIdentity(prismaClient) {
       pg_catalog.has_schema_privilege(session_user, 'balancevault_private', 'CREATE') AS can_create_private
   `;
 
-  if (!identity?.is_runtime_member || identity.is_superuser || identity.is_migration_member
+  if (!identity?.has_runtime_privileges || identity.is_superuser || identity.is_migration_member
       || identity.is_posting_owner_member || identity.is_auth_owner_member || identity.is_account_owner_member) {
-    throw new Error('DATABASE_URL must use a non-privileged login that is a member only of balancevault_runtime');
+    throw new Error('DATABASE_URL must use a non-privileged login that inherits only balancevault_runtime');
   }
   if (identity.has_role_admin_options || identity.has_direct_table_write
       || identity.can_create_public || identity.can_create_private) {
