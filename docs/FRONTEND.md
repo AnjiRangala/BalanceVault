@@ -4,6 +4,14 @@ The web app uses `VITE_API_BASE_URL` to call the existing API. It provides `/log
 
 Administrators see an account creation form that submits to the existing `POST /api/accounts` function. The database and API enforce administrator authorization and validate the holder. A selected account is held in frontend authentication context for future transaction forms; this value is only a UI convenience and does not authorize API access. Account creation refreshes the account list. Future successful money movement actions should call the shared `refreshAccounts()` context action to refresh account views.
 
+## Financial transaction requests
+
+Deposit, withdrawal, and transfer actions call the existing `POST /api/deposits`, `/api/withdrawals`, and `/api/transfers` endpoints. INR input is converted to paise with `BigInt` string arithmetic and sent as a decimal string. The backend remains authoritative for account permissions, balances, and overdraft checks.
+
+Before submission, the user reviews the source, destination, and amount. The client generates one UUID idempotency key for that logical request and stores its key and exact payload in `localStorage` under a key scoped to the current user and transaction type. This pending request data is not an access credential, but it contains account identifiers and amounts and is readable by page JavaScript. It is removed after a confirmed posted or refused response. If the network or server response is uncertain, the UI retains the exact payload/key and permits retrying only that request; it does not silently create a replacement key. A new key is created only after an explicit new transaction or a changed reviewed payload.
+
+`localStorage` is not protected from cross-site scripting. The idempotency key does not authorize an operation; requests still require the bearer token and backend authorization. If the user clears browser storage while a request is uncertain, the client may lose its retry key. The safest response is to check the server-side statement or transaction history before initiating another request.
+
 ## Session storage
 
 For this hackathon SPA, the access token, safe user response, and calculated expiry are stored in `sessionStorage`. This keeps a login across reloads in the same tab and clears it when that tab's session ends. The interface clears the session when the stored expiry is reached on initialization or when an API request returns `401`.

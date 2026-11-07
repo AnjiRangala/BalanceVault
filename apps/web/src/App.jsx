@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
 import { ApiError, getBackendStatus } from './lib/api.js';
 import { createCustomerAccount, fetchAccount, fetchAccountBalance, fetchAccounts, formatAccountDate, formatPaiseAsINR } from './lib/accounts.js';
+import FinancialTransactionPage from './components/FinancialTransactionPage.jsx';
 
 function navigate(path, replace = false) {
   if (window.location.pathname !== path) {
@@ -195,12 +196,13 @@ function AppShell({ pathname }) {
 
       <div className="main-column">
         <header className="topbar">
-          <div className="topbar-leading"><button className="mobile-menu-button" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation"><span /><span /><span /></button><div className="breadcrumb"><span>Workspace</span><b>/</b><strong>{pathname.startsWith('/accounts/') ? 'Account details' : pathname === '/accounts' ? 'Accounts' : pathname === '/audit' ? 'Audit log' : 'Overview'}</strong></div></div>
+          <div className="topbar-leading"><button className="mobile-menu-button" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation"><span /><span /><span /></button><div className="breadcrumb"><span>Workspace</span><b>/</b><strong>{pathname.startsWith('/accounts/') ? 'Account details' : pathname.startsWith('/transactions/') ? pathname.split('/')[2]?.[0]?.toUpperCase() + pathname.split('/')[2]?.slice(1) : pathname === '/accounts' ? 'Accounts' : pathname === '/audit' ? 'Audit log' : 'Overview'}</strong></div></div>
           <div className="topbar-actions"><BackendBadge /><span className="topbar-divider" /><div className="profile-summary"><span className="avatar">{user.email[0]?.toUpperCase()}</span><span className="profile-email">{user.email}</span></div><button className="icon-button signout-button" onClick={signOut} title="Sign out" aria-label="Sign out"><Icon name="logout" size={18} /></button></div>
         </header>
         <main className="page-content">
           {pathname === '/accounts' ? <AccountsPage request={request} isAdmin={isAdmin} accountRefreshVersion={accountRefreshVersion} refreshAccounts={refreshAccounts} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
             : pathname.startsWith('/accounts/') ? <AccountDetailsPage accountId={pathname.split('/')[2]} request={request} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
+              : pathname.startsWith('/transactions/') ? <FinancialTransactionPage type={pathname.split('/')[2]} onNavigate={navigate} />
               : pathname === '/audit' && isAdmin ? <AuditPage request={request} /> : <DashboardPage request={request} user={user} accountRefreshVersion={accountRefreshVersion} />}
         </main>
         <footer className="app-footer"><span>BalanceVault <i>·</i> Financial clarity, by design.</span><span className="footer-secure"><Icon name="lock" size={13} /> Secure session</span></footer>
@@ -249,9 +251,9 @@ function DashboardPage({ request, user, accountRefreshVersion }) {
         <section className="section-block quick-actions-block">
           <div className="section-heading compact-heading"><div><span className="section-kicker">ON YOUR TERMS</span><h2>Quick actions</h2></div></div>
           <div className="quick-actions">
-            <ActionCard title="Deposit" label="Add funds" tone="sage" />
-            <ActionCard title="Withdraw" label="Move funds out" tone="cream" />
-            <ActionCard title="Transfer" label="Between accounts" tone="lavender" />
+            <ActionCard title="Deposit" label="Add funds" tone="sage" onClick={() => navigate('/transactions/deposit')} />
+            <ActionCard title="Withdraw" label="Move funds out" tone="cream" onClick={() => navigate('/transactions/withdrawal')} />
+            <ActionCard title="Transfer" label="Between accounts" tone="lavender" onClick={() => navigate('/transactions/transfer')} />
           </div>
           <p className="coming-note"><span />Money movement will be available here soon.</p>
         </section>
@@ -457,8 +459,8 @@ function AccountCard({ account, balance, selected, onSelect }) {
   </article>;
 }
 
-function ActionCard({ title, label, tone }) {
-  return <button className={`action-card action-${tone}`} type="button" disabled aria-label={`${title}, coming soon`}><span className="action-icon"><Icon name="plus" size={19} /></span><span className="action-title">{title}</span><span className="action-label">{label}</span><span className="action-soon">SOON</span></button>;
+function ActionCard({ title, label, tone, onClick }) {
+  return <button className={`action-card action-${tone}`} type="button" onClick={onClick} aria-label={`${title} transaction`}><span className="action-icon"><Icon name="plus" size={19} /></span><span className="action-title">{title}</span><span className="action-label">{label}</span><span className="action-soon">OPEN</span></button>;
 }
 
 function EmptyState({ title, detail, icon = 'cards' }) {
@@ -474,7 +476,8 @@ function AppRouter() {
   const { isAuthenticated, user } = useAuth();
   const publicRoute = pathname === '/login' || pathname === '/register';
   const accountDetailRoute = /^\/accounts\/[^/]+$/.test(pathname);
-  const knownRoute = ['/login', '/register', '/dashboard', '/accounts', '/audit'].includes(pathname) || accountDetailRoute;
+  const transactionRoute = /^\/transactions\/(deposit|withdrawal|transfer)$/.test(pathname);
+  const knownRoute = ['/login', '/register', '/dashboard', '/accounts', '/audit'].includes(pathname) || accountDetailRoute || transactionRoute;
 
   useEffect(() => {
     if (!isAuthenticated && !publicRoute) navigate('/login', true);

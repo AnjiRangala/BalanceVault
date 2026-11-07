@@ -1,15 +1,17 @@
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, payload = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.payload = payload;
   }
 }
 
-export async function apiRequest(path, { method = 'GET', body, token, signal, onUnauthorized } = {}) {
+export async function apiRequest(path, { method = 'GET', body, token, signal, onUnauthorized, headers: extraHeaders } = {}) {
   const headers = new Headers({ Accept: 'application/json' });
+  if (extraHeaders) new Headers(extraHeaders).forEach((value, key) => headers.set(key, value));
   if (body !== undefined) headers.set('Content-Type', 'application/json');
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
@@ -36,7 +38,7 @@ export async function apiRequest(path, { method = 'GET', body, token, signal, on
   if (response.status === 401 && token) onUnauthorized?.();
   if (!response.ok) {
     const message = typeof payload.error === 'string' ? payload.error : 'The request could not be completed.';
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, payload);
   }
   return payload;
 }
