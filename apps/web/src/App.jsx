@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
 import { ApiError, getBackendStatus } from './lib/api.js';
 import { createCustomerAccount, fetchAccount, fetchAccountBalance, fetchAccounts, formatAccountDate, formatPaiseAsINR } from './lib/accounts.js';
-import FinancialTransactionPage from './components/FinancialTransactionPage.jsx';
-import { AuditPage, StatementEvent, StatementPage, TransferDetailsPage } from './components/LedgerPages.jsx';
 import { fetchAccountStatement, navigationForRole } from './lib/ledger.js';
+
+const FinancialTransactionPage = lazy(() => import('./components/FinancialTransactionPage.jsx'));
+const StatementEvent = lazy(() => import('./components/LedgerPages.jsx').then((module) => ({ default: module.StatementEvent })));
+const StatementPage = lazy(() => import('./components/LedgerPages.jsx').then((module) => ({ default: module.StatementPage })));
+const TransferDetailsPage = lazy(() => import('./components/LedgerPages.jsx').then((module) => ({ default: module.TransferDetailsPage })));
+const AuditPage = lazy(() => import('./components/LedgerPages.jsx').then((module) => ({ default: module.AuditPage })));
 
 function navigate(path, replace = false) {
   if (window.location.pathname !== path) {
@@ -198,12 +202,14 @@ function AppShell({ pathname }) {
           <div className="topbar-actions"><BackendBadge /><span className="topbar-divider" /><div className="profile-summary"><span className="avatar">{user.email[0]?.toUpperCase()}</span><span className="profile-email">{user.email}</span></div><button className="icon-button signout-button" onClick={signOut} title="Sign out" aria-label="Sign out"><Icon name="logout" size={18} /></button></div>
         </header>
         <main className="page-content">
+          <Suspense fallback={<div className="loading-row" role="status"><span className="spinner spinner-dark" />Loading workspace</div>}>
           {pathname === '/accounts' ? <AccountsPage request={request} isAdmin={isAdmin} accountRefreshVersion={accountRefreshVersion} refreshAccounts={refreshAccounts} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
             : pathname === '/statements' ? <StatementPage request={request} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
             : pathname.startsWith('/accounts/') ? <AccountDetailsPage accountId={pathname.split('/')[2]} request={request} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
               : pathname.startsWith('/transactions/') ? <FinancialTransactionPage type={pathname.split('/')[2]} onNavigate={navigate} />
               : pathname.startsWith('/transfers/') ? <TransferDetailsPage request={request} transferId={pathname.split('/')[2]} onNavigate={navigate} />
                 : pathname === '/audit' && isAdmin ? <AuditPage request={request} /> : <DashboardPage request={request} user={user} accountRefreshVersion={accountRefreshVersion} />}
+          </Suspense>
         </main>
         <footer className="app-footer"><span>BalanceVault <i>·</i> Financial clarity, by design.</span><span className="footer-secure"><Icon name="lock" size={13} /> Secure session</span></footer>
       </div>
