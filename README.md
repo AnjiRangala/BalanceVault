@@ -41,3 +41,5 @@ npm run db:migrate
 ```
 
 See [API documentation](docs/API.md) and [architecture](docs/ARCHITECTURE.md).
+
+See [frontend authentication and session storage](docs/FRONTEND.md) for the browser token strategy and its security limitations.

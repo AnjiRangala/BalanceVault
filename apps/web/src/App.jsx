@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
 import { ApiError, getBackendStatus } from './lib/api.js';
+import { createCustomerAccount, fetchAccount, fetchAccountBalance, fetchAccounts, formatAccountDate, formatPaiseAsINR } from './lib/accounts.js';
 
 function navigate(path, replace = false) {
   if (window.location.pathname !== path) {
@@ -163,7 +164,7 @@ function BackendBadge() {
 const roleLabels = { ADMIN: 'Administrator', ACCOUNT_HOLDER: 'Account holder', AUDITOR: 'Auditor' };
 
 function AppShell({ pathname }) {
-  const { user, logout, request } = useAuth();
+  const { user, logout, request, accountRefreshVersion, refreshAccounts, selectedAccountId, setSelectedAccountId } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -194,11 +195,13 @@ function AppShell({ pathname }) {
 
       <div className="main-column">
         <header className="topbar">
-          <div className="topbar-leading"><button className="mobile-menu-button" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation"><span /><span /><span /></button><div className="breadcrumb"><span>Workspace</span><b>/</b><strong>{pathname === '/accounts' ? 'Accounts' : pathname === '/audit' ? 'Audit log' : 'Overview'}</strong></div></div>
+          <div className="topbar-leading"><button className="mobile-menu-button" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation"><span /><span /><span /></button><div className="breadcrumb"><span>Workspace</span><b>/</b><strong>{pathname.startsWith('/accounts/') ? 'Account details' : pathname === '/accounts' ? 'Accounts' : pathname === '/audit' ? 'Audit log' : 'Overview'}</strong></div></div>
           <div className="topbar-actions"><BackendBadge /><span className="topbar-divider" /><div className="profile-summary"><span className="avatar">{user.email[0]?.toUpperCase()}</span><span className="profile-email">{user.email}</span></div><button className="icon-button signout-button" onClick={signOut} title="Sign out" aria-label="Sign out"><Icon name="logout" size={18} /></button></div>
         </header>
         <main className="page-content">
-          {pathname === '/accounts' ? <AccountsPage request={request} /> : pathname === '/audit' && isAdmin ? <AuditPage request={request} /> : <DashboardPage request={request} user={user} />}
+          {pathname === '/accounts' ? <AccountsPage request={request} isAdmin={isAdmin} accountRefreshVersion={accountRefreshVersion} refreshAccounts={refreshAccounts} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
+            : pathname.startsWith('/accounts/') ? <AccountDetailsPage accountId={pathname.split('/')[2]} request={request} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
+              : pathname === '/audit' && isAdmin ? <AuditPage request={request} /> : <DashboardPage request={request} user={user} accountRefreshVersion={accountRefreshVersion} />}
         </main>
         <footer className="app-footer"><span>BalanceVault <i>·</i> Financial clarity, by design.</span><span className="footer-secure"><Icon name="lock" size={13} /> Secure session</span></footer>
       </div>
@@ -206,16 +209,16 @@ function AppShell({ pathname }) {
   );
 }
 
-function DashboardPage({ request, user }) {
+function DashboardPage({ request, user, accountRefreshVersion }) {
   const [accounts, setAccounts] = useState(null);
   const [error, setError] = useState('');
   useEffect(() => {
     const controller = new AbortController();
-    request('/api/accounts', { signal: controller.signal })
-      .then((result) => setAccounts(result.accounts ?? []))
+    fetchAccounts(request, { signal: controller.signal })
+      .then(setAccounts)
       .catch((requestError) => { if (requestError.name !== 'AbortError') setError(requestError.message); });
     return () => controller.abort();
-  }, [request]);
+  }, [accountRefreshVersion, request]);
   const firstName = user.email.split('@')[0];
   const activeCount = accounts?.filter((account) => account.status === 'ACTIVE').length ?? 0;
 
@@ -262,20 +265,165 @@ function DashboardPage({ request, user }) {
   );
 }
 
-function AccountsPage({ request }) {
+function AccountsPage({ request, isAdmin, accountRefreshVersion, refreshAccounts, selectedAccountId, setSelectedAccountId }) {
   const [accounts, setAccounts] = useState(null);
+  const [balances, setBalances] = useState({});
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+
   useEffect(() => {
     const controller = new AbortController();
-    request('/api/accounts', { signal: controller.signal })
-      .then((result) => setAccounts(result.accounts ?? []))
-      .catch((requestError) => { if (requestError.name !== 'AbortError') setError(requestError.message); });
+    setLoading(true);
+    setError('');
+    fetchAccounts(request, { signal: controller.signal })
+      .then(async (items) => {
+        setAccounts(items);
+        if (selectedAccountId && !items.some((account) => account.id === selectedAccountId)) setSelectedAccountId(null);
+        const results = await Promise.all(items.map(async (account) => {
+          try {
+            const balance = await fetchAccountBalance(request, account.id, { signal: controller.signal });
+            return [account.id, { balancePaise: balance.balancePaise, currencyCode: balance.currencyCode }];
+          } catch (balanceError) {
+            if (balanceError.name === 'AbortError') throw balanceError;
+            return [account.id, { error: balanceError }];
+          }
+        }));
+        if (!controller.signal.aborted) setBalances(Object.fromEntries(results));
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.status === 403
+            ? 'Your account role does not permit viewing accounts.'
+            : requestError.status === 401
+              ? 'Your session has expired. Sign in again to continue.'
+              : requestError.message || 'We could not load your accounts.');
+        }
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [request]);
-  return <section className="section-block full-page-block"><div className="page-title-row"><div><span className="section-kicker">YOUR SPACE</span><h1>Accounts</h1><p>Accounts available to your BalanceVault profile.</p></div>{accounts && <span className="count-pill">{accounts.length} {accounts.length === 1 ? 'account' : 'accounts'}</span>}</div>
-    {error && <div className="inline-error" role="alert">{error}</div>}
-    {accounts === null && !error ? <div className="loading-row"><span className="spinner spinner-dark" />Loading accounts</div> : accounts?.length === 0 ? <EmptyState title="No accounts available" detail="Accounts you are permitted to view will appear here." /> : <div className="accounts-grid">{accounts?.map((account) => <AccountCard key={account.id} account={account} />)}</div>}
+  }, [accountRefreshVersion, request, retryVersion, setSelectedAccountId]);
+
+  function retry() {
+    setAccounts(null);
+    setBalances({});
+    setRetryVersion((version) => version + 1);
+  }
+
+  return (
+    <section className="section-block full-page-block">
+      <div className="page-title-row">
+        <div><span className="section-kicker">YOUR SPACE</span><h1>Accounts</h1><p>Accounts available to your BalanceVault profile.</p></div>
+        <div className="account-page-actions">
+          {accounts && <span className="count-pill">{accounts.length} {accounts.length === 1 ? 'account' : 'accounts'}</span>}
+          {isAdmin && <button className="button button-primary create-account-toggle" onClick={() => setShowCreateForm((visible) => !visible)}><Icon name="plus" size={17} />{showCreateForm ? 'Close form' : 'New account'}</button>}
+        </div>
+      </div>
+      {isAdmin && showCreateForm && <CreateAccountForm request={request} onCreated={(account) => { refreshAccounts(); setSelectedAccountId(account.id); setShowCreateForm(false); }} />}
+      {error && <ErrorPanel message={error} onRetry={retry} />}
+      {loading && accounts === null ? <div className="loading-row"><span className="spinner spinner-dark" />Loading accounts</div>
+        : !error && accounts?.length === 0 ? <EmptyState title="No accounts available" detail="Accounts you are permitted to view will appear here." />
+          : <div className="accounts-grid">{accounts?.map((account) => <AccountCard key={account.id} account={account} balance={balances[account.id]} selected={selectedAccountId === account.id} onSelect={() => setSelectedAccountId(account.id)} />)}</div>}
+      {!loading && !error && accounts?.length > 0 && Object.values(balances).some((item) => item.error) && <p className="balance-access-note" role="status">Some balance details could not be loaded. Retry the page to check again.</p>}
+      {accounts?.length > 0 && <p className="selection-help">Select an account to prefill future deposit, withdrawal, and transfer forms. This selection does not grant access; the API checks permissions for every request.</p>}
+    </section>
+  );
+}
+
+function AccountDetailsPage({ accountId, request, selectedAccountId, setSelectedAccountId }) {
+  const [account, setAccount] = useState(null);
+  const [balance, setBalance] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [retryVersion, setRetryVersion] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError('');
+    Promise.all([
+      fetchAccount(request, accountId, { signal: controller.signal }),
+      fetchAccountBalance(request, accountId, { signal: controller.signal }),
+    ]).then(([detail, accountBalance]) => {
+      setAccount(detail);
+      setBalance(accountBalance);
+    }).catch((requestError) => {
+      if (requestError.name !== 'AbortError') {
+        setError(requestError.status === 401
+          ? 'Your session has expired. Sign in again to continue.'
+          : requestError.status === 403
+            ? 'You do not have permission to view this account.'
+            : requestError.status === 404
+              ? 'This account is unavailable or you no longer have permission to view it.'
+              : requestError.message || 'We could not load this account.');
+      }
+    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [accountId, request, retryVersion]);
+
+  return <section className="section-block full-page-block">
+    <button className="back-link" onClick={() => navigate('/accounts')}>← <span>Back to accounts</span></button>
+    {loading ? <div className="loading-row"><span className="spinner spinner-dark" />Loading account details</div>
+      : error ? <ErrorPanel message={error} onRetry={() => setRetryVersion((version) => version + 1)} />
+        : account && <>
+          <div className="page-title-row detail-title-row"><div><span className="section-kicker">{account.type === 'BUSINESS' ? 'BUSINESS ACCOUNT' : 'PERSONAL ACCOUNT'}</span><h1>{account.accountNumber}</h1><p>Account details and current available balance.</p></div><span className={`status-pill status-${account.status.toLowerCase()}`}><i />{account.status.toLowerCase()}</span></div>
+          <div className="account-detail-layout">
+            <article className="detail-balance-card"><span className="detail-card-kicker">CURRENT BALANCE</span><strong>{balance ? formatPaiseAsINR(balance.balancePaise, balance.currencyCode) : 'Balance unavailable'}</strong><small>Balance supplied by the BalanceVault account API.</small><div className="detail-balance-watermark" aria-hidden="true">BV</div></article>
+            <article className="detail-info-card"><div className="detail-info-heading"><span className="account-symbol account-symbol-large"><Icon name={account.type === 'BUSINESS' ? 'building' : 'cards'} size={20} /></span><div><span className="section-kicker">ACCOUNT INFORMATION</span><h2>Account details</h2></div></div><dl className="detail-list"><div><dt>Account number</dt><dd>{account.accountNumber}</dd></div><div><dt>Account type</dt><dd>{account.type === 'BUSINESS' ? 'Business' : 'Personal'}</dd></div><div><dt>Status</dt><dd><span className={`status-pill status-${account.status.toLowerCase()}`}><i />{account.status.toLowerCase()}</span></dd></div><div><dt>Currency</dt><dd>{account.currencyCode}</dd></div><div><dt>Created</dt><dd>{formatAccountDate(account.createdAt)}</dd></div></dl></article>
+          </div>
+          <div className="detail-selection-row"><div><strong>Future transaction forms</strong><p>Use this account as the starting selection for upcoming money movement forms.</p></div><button className={`button ${selectedAccountId === account.id ? 'button-selected' : 'button-outline'}`} onClick={() => setSelectedAccountId(account.id)}>{selectedAccountId === account.id ? 'Selected for future actions' : 'Select this account'}</button></div>
+        </>}
   </section>;
+}
+
+function CreateAccountForm({ request, onCreated }) {
+  const [accountNumber, setAccountNumber] = useState('');
+  const [accountType, setAccountType] = useState('PERSONAL');
+  const [holderUserId, setHolderUserId] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    const cleanNumber = accountNumber.trim();
+    const cleanHolder = holderUserId.trim();
+    if (!cleanNumber || cleanNumber.length > 64 || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(cleanHolder)) {
+      setError('Enter an account number up to 64 characters and a valid account holder UUID.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const account = await createCustomerAccount(request, { accountNumber: cleanNumber, accountType, holderUserId: cleanHolder });
+      onCreated(account);
+    } catch (requestError) {
+      setError(requestError.status === 409
+        ? 'That account number is already in use.'
+        : requestError.status === 403
+          ? 'Your current role cannot create accounts.'
+          : requestError.status === 422
+            ? 'The holder must be an active account holder and the account details must be valid.'
+            : requestError.message || 'The account could not be created.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return <form className="create-account-form" onSubmit={submit}>
+    <div className="create-form-heading"><div><span className="section-kicker">ADMINISTRATION</span><h2>Create customer account</h2><p>The backend verifies your administrator role and the holder’s account status.</p></div><span className="admin-only-pill"><Icon name="shield" size={14} /> ADMIN ONLY</span></div>
+    <div className="create-form-grid">
+      <label className="field-label"><span>Account number</span><input value={accountNumber} onChange={(event) => setAccountNumber(event.target.value)} maxLength={64} required placeholder="e.g. BV-10428" /></label>
+      <label className="field-label"><span>Account type</span><select value={accountType} onChange={(event) => setAccountType(event.target.value)}><option value="PERSONAL">Personal</option><option value="BUSINESS">Business</option></select></label>
+      <label className="field-label holder-field"><span>Holder user ID</span><input value={holderUserId} onChange={(event) => setHolderUserId(event.target.value)} autoComplete="off" required placeholder="Account holder UUID" /></label>
+    </div>
+    {error && <div className="form-error" role="alert"><span>!</span>{error}</div>}
+    <div className="create-form-footer"><p>Account permissions are created by the server with view access only.</p><button className="button button-primary" disabled={submitting}>{submitting ? <><span className="spinner" />Creating…</> : <><Icon name="plus" size={17} />Create account</>}</button></div>
+  </form>;
+}
+
+function ErrorPanel({ message, onRetry }) {
+  return <div className="account-error-panel" role="alert"><span className="error-mark">!</span><div><strong>We couldn’t load the account information</strong><p>{message}</p></div><button className="button button-outline" onClick={onRetry}>Retry</button></div>;
 }
 
 function AuditPage({ request }) {
@@ -298,8 +446,15 @@ function AccountRow({ account }) {
   return <article className="account-row"><span className="account-symbol"><Icon name={account.type === 'BUSINESS' ? 'building' : 'cards'} size={18} /></span><span className="account-row-main"><strong>{account.accountNumber}</strong><small>{account.type === 'BUSINESS' ? 'Business account' : 'Personal account'}</small></span><span className={`status-pill status-${account.status.toLowerCase()}`}><i />{account.status.toLowerCase()}</span><span className="account-currency">{account.currencyCode}</span></article>;
 }
 
-function AccountCard({ account }) {
-  return <article className="account-card"><div className="account-card-top"><span className="account-symbol account-symbol-large"><Icon name={account.type === 'BUSINESS' ? 'building' : 'cards'} size={20} /></span><span className={`status-pill status-${account.status.toLowerCase()}`}><i />{account.status.toLowerCase()}</span></div><div className="account-card-info"><span>{account.type === 'BUSINESS' ? 'BUSINESS ACCOUNT' : 'PERSONAL ACCOUNT'}</span><h3>{account.accountNumber}</h3></div><div className="account-card-bottom"><span>Currency</span><strong>{account.currencyCode}</strong></div></article>;
+function AccountCard({ account, balance, selected, onSelect }) {
+  const balanceText = balance?.error ? 'Unavailable' : balance ? formatPaiseAsINR(balance.balancePaise, balance.currencyCode) : 'Loading…';
+  return <article className={`account-card ${selected ? 'account-card-selected' : ''}`}>
+    <div className="account-card-top"><span className="account-symbol account-symbol-large"><Icon name={account.type === 'BUSINESS' ? 'building' : 'cards'} size={20} /></span><span className={`status-pill status-${account.status.toLowerCase()}`}><i />{account.status.toLowerCase()}</span></div>
+    <button className="account-card-open" onClick={() => navigate(`/accounts/${account.id}`)} aria-label={`View account ${account.accountNumber}`}><span>{account.type === 'BUSINESS' ? 'BUSINESS ACCOUNT' : 'PERSONAL ACCOUNT'}</span><strong>{account.accountNumber}</strong></button>
+    <div className="account-card-balance"><span>Available balance</span><strong>{balanceText}</strong></div>
+    <div className="account-card-meta"><span>Created {formatAccountDate(account.createdAt)}</span><span>{account.currencyCode}</span></div>
+    <button className={`account-select-button ${selected ? 'account-select-active' : ''}`} onClick={onSelect} aria-pressed={selected}>{selected ? '✓ Selected for future actions' : 'Select for future actions'}</button>
+  </article>;
 }
 
 function ActionCard({ title, label, tone }) {
@@ -318,14 +473,16 @@ function AppRouter() {
   const pathname = usePathname();
   const { isAuthenticated, user } = useAuth();
   const publicRoute = pathname === '/login' || pathname === '/register';
+  const accountDetailRoute = /^\/accounts\/[^/]+$/.test(pathname);
+  const knownRoute = ['/login', '/register', '/dashboard', '/accounts', '/audit'].includes(pathname) || accountDetailRoute;
 
   useEffect(() => {
     if (!isAuthenticated && !publicRoute) navigate('/login', true);
     else if (isAuthenticated && publicRoute) navigate('/dashboard', true);
-    else if (!['/login', '/register', '/dashboard', '/accounts', '/audit'].includes(pathname)) {
+    else if (!knownRoute) {
       navigate(isAuthenticated ? '/dashboard' : '/login', true);
     } else if (pathname === '/audit' && user?.role !== 'ADMIN') navigate('/dashboard', true);
-  }, [isAuthenticated, pathname, publicRoute, user?.role]);
+  }, [isAuthenticated, knownRoute, pathname, publicRoute, user?.role]);
 
   if (!isAuthenticated) return <AuthPage key={pathname === '/register' ? 'register' : 'login'} mode={pathname === '/register' ? 'register' : 'login'} />;
   return <AppShell pathname={pathname} />;

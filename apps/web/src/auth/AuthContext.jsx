@@ -21,11 +21,16 @@ function readSession() {
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(readSession);
+  const [accountRefreshVersion, setAccountRefreshVersion] = useState(0);
+  const [selectedAccountId, setSelectedAccountId] = useState(null);
 
   const logout = useCallback(() => {
     sessionStorage.removeItem(STORAGE_KEY);
     setSession(null);
+    setSelectedAccountId(null);
   }, []);
+
+  const refreshAccounts = useCallback(() => setAccountRefreshVersion((version) => version + 1), []);
 
   const acceptAuthentication = useCallback((result) => {
     if (!result?.accessToken || !result?.user?.id || !result?.user?.email) {
@@ -71,7 +76,11 @@ export function AuthProvider({ children }) {
     register,
     logout,
     request,
-  }), [login, logout, register, request, session]);
+    accountRefreshVersion,
+    refreshAccounts,
+    selectedAccountId,
+    setSelectedAccountId,
+  }), [accountRefreshVersion, login, logout, refreshAccounts, register, request, selectedAccountId, session]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

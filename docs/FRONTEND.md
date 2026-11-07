@@ -1,6 +1,8 @@
 # Frontend authentication and dashboard
 
-The web app uses `VITE_API_BASE_URL` to call the existing API. It provides `/login`, `/register`, `/dashboard`, `/accounts`, and an administrator-only `/audit` presentation. Protected pages load actual account or audit data from the API. Account balances and transaction activity are not fabricated; activity stays in an empty state until a ledger activity endpoint is connected to the interface.
+The web app uses `VITE_API_BASE_URL` to call the existing API. It provides `/login`, `/register`, `/dashboard`, `/accounts`, `/accounts/:id`, and an administrator-only `/audit` presentation. The account list loads the permitted accounts and fetches each balance from its account balance endpoint. Account detail loads both the account and balance endpoints. Display formatting converts paise with `BigInt` quotient/remainder arithmetic, avoiding floating-point conversion. Account balances and transaction activity are not fabricated; activity stays in an empty state until a ledger activity endpoint is connected to the interface.
+
+Administrators see an account creation form that submits to the existing `POST /api/accounts` function. The database and API enforce administrator authorization and validate the holder. A selected account is held in frontend authentication context for future transaction forms; this value is only a UI convenience and does not authorize API access. Account creation refreshes the account list. Future successful money movement actions should call the shared `refreshAccounts()` context action to refresh account views.
 
 ## Session storage
 
