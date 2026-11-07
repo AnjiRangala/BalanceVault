@@ -21,10 +21,10 @@ const ids = {
 };
 
 const users = new Map([
-  [ids.admin, { id: ids.admin, role: 'ADMIN', isActive: true }],
-  [ids.holder, { id: ids.holder, role: 'ACCOUNT_HOLDER', isActive: true }],
-  [ids.auditor, { id: ids.auditor, role: 'AUDITOR', isActive: true }],
-  [ids.otherHolder, { id: ids.otherHolder, role: 'ACCOUNT_HOLDER', isActive: true }],
+  [ids.admin, { id: ids.admin, role: 'ADMIN', isActive: true, tokenVersion: 0 }],
+  [ids.holder, { id: ids.holder, role: 'ACCOUNT_HOLDER', isActive: true, tokenVersion: 0 }],
+  [ids.auditor, { id: ids.auditor, role: 'AUDITOR', isActive: true, tokenVersion: 0 }],
+  [ids.otherHolder, { id: ids.otherHolder, role: 'ACCOUNT_HOLDER', isActive: true, tokenVersion: 0 }],
 ]);
 
 const accounts = [
@@ -138,7 +138,7 @@ async function startServer() {
 }
 
 function tokenFor(userId) {
-  return jwt.sign({}, process.env.JWT_ACCESS_SECRET, {
+  return jwt.sign({ ver: 0 }, process.env.JWT_ACCESS_SECRET, {
     algorithm: 'HS256',
     subject: userId,
     issuer: JWT_ISSUER,

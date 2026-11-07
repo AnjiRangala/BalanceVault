@@ -137,10 +137,16 @@ before(async () => {
       pg_has_role('balancevault_migration_owner','balancevault_runtime','MEMBER') AS migration_owner_member_of_runtime,
       (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace,
         LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
-        WHERE n.nspname IN ('public','balancevault_private') AND acl.grantee=0 AND acl.privilege_type='EXECUTE') AS public_execute_grants
+        WHERE n.nspname IN ('public','balancevault_private','balancevault_auth_private')
+          AND acl.grantee=0 AND acl.privilege_type='EXECUTE'
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_depend d
+             WHERE d.classid='pg_catalog.pg_proc'::regclass AND d.objid=p.oid
+               AND d.refclassid='pg_catalog.pg_extension'::regclass AND d.deptype='e'
+          )) AS public_execute_grants
   `);
-  assert.equal(Number(rows[0].enum_count), 6);
-  assert.equal(Number(rows[0].table_count), 8);
+  assert.equal(Number(rows[0].enum_count), 7);
+  assert.equal(Number(rows[0].table_count), 11);
   assert.equal(Number(rows[0].trigger_count), 19);
   assert.equal(Number(rows[0].private_function_count), 17);
   assert.equal(Number(rows[0].private_functions_owned), 17);

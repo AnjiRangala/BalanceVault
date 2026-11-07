@@ -13,7 +13,7 @@ export const INVALID_CREDENTIALS = 'Invalid email or password';
 
 export function issueAccessToken(user) {
   return jwt.sign(
-    { role: user.role },
+    { role: user.role, ver: user.tokenVersion ?? 0 },
     getJwtAccessSecret(),
     {
       algorithm: 'HS256',
@@ -25,13 +25,14 @@ export function issueAccessToken(user) {
   );
 }
 
-export async function registerAccountHolder(prismaClient, { email, password }) {
+export async function registerAccountHolder(prismaClient, { fullName, email, password }) {
   const id = randomUUID();
   const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
   const [user] = await prismaClient.$queryRaw`
     SELECT *
-      FROM public.create_account_holder(
+      FROM public.create_account_holder_profile(
         ${id}::uuid,
+        ${fullName}::text,
         ${email}::text,
         ${passwordHash}::text
       )
@@ -40,8 +41,8 @@ export async function registerAccountHolder(prismaClient, { email, password }) {
   return user;
 }
 
-export async function authenticateCredentials(prismaClient, email, password) {
-  const user = await prismaClient.user.findUnique({
+export async function authenticateCredentials(authPrismaClient, email, password) {
+  const user = await authPrismaClient.user.findUnique({
     where: { email },
     select: {
       id: true,
@@ -49,6 +50,8 @@ export async function authenticateCredentials(prismaClient, email, password) {
       passwordHash: true,
       role: true,
       isActive: true,
+      tokenVersion: true,
+      fullName: true,
     },
   });
 
@@ -71,5 +74,5 @@ export function isUniqueEmailViolation(error) {
 }
 
 export function safeUser(user) {
-  return { id: user.id, email: user.email, role: user.role };
+  return { id: user.id, fullName: user.fullName ?? null, email: user.email, role: user.role };
 }

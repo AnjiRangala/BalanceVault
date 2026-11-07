@@ -12,7 +12,9 @@
     "test": "node --test",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy --config prisma.migrate.config.js",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "admin:bootstrap": "node scripts/bootstrap-admin.js",
+    "admin:provision-actor-key": "node scripts/provision-actor-assertion-key.js"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.0.0",

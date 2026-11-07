@@ -108,7 +108,7 @@ test('account creation function privileges and authenticated HTTP creation are e
   await verifyRuntimeDatabaseIdentity(prisma);
   const instance = await listen(createApp({ prismaClient: prisma }));
   const accountNumber = `BV-${randomUUID()}`;
-  const accessToken = jwt.sign({ role: 'ADMIN' }, process.env.JWT_ACCESS_SECRET, {
+  const accessToken = jwt.sign({ role: 'ADMIN', ver: 0 }, process.env.JWT_ACCESS_SECRET, {
     algorithm: 'HS256',
     subject: adminId,
     issuer: JWT_ISSUER,

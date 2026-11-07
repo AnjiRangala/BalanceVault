@@ -26,4 +26,6 @@ The stored role is used only to show or hide navigation. A browser user can chan
 
 Set `VITE_API_BASE_URL` to the API origin (for example `http://localhost:3001`) in the root `.env`. Vite exposes only variables with the `VITE_` prefix. Start both apps with `npm run dev`, or start them separately with `npm run dev:api` and `npm run dev:web`.
 
-Registration currently collects the name required by the API contract. The current backend `User` schema does not persist a name, so the dashboard uses the account email for its welcome text.
+Registration stores the submitted full name in the account profile. Profile and settings pages allow updating the name, while role, email, and active state remain read-only. Password changes require the current password and return the user to login because all existing JWTs are invalidated.
+
+Account holders may submit a personal or business account-opening request. Administrators review and approve or reject requests. Approval uses a restricted database function that invokes the existing atomic account creator; a browser cannot directly create an account. The administrator user page can activate or deactivate users but cannot change roles. Auditors receive read-only account and audit navigation; all authorization remains enforced by the API.

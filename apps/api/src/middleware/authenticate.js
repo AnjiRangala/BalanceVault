@@ -47,10 +47,15 @@ export function createAuthenticate(prismaClient) {
     try {
       const user = await prismaClient.user.findUnique({
         where: { id: subject.data },
-        select: { id: true, role: true, isActive: true },
+        select: { id: true, role: true, isActive: true, tokenVersion: true, fullName: true, email: true },
       });
 
       if (!user || !user.isActive) {
+        rejectAuthentication(response);
+        return;
+      }
+
+      if (claims.ver !== user.tokenVersion) {
         rejectAuthentication(response);
         return;
       }

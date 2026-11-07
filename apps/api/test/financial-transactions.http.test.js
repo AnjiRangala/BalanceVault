@@ -15,8 +15,8 @@ const accountA = '40000000-0000-4000-8000-000000000001';
 const accountB = '40000000-0000-4000-8000-000000000002';
 const missingAccount = '40000000-0000-4000-8000-000000000099';
 const users = new Map([
-  [actorId, { id: actorId, role: 'ACCOUNT_HOLDER', isActive: true }],
-  [otherActorId, { id: otherActorId, role: 'ACCOUNT_HOLDER', isActive: true }],
+  [actorId, { id: actorId, role: 'ACCOUNT_HOLDER', isActive: true, tokenVersion: 0 }],
+  [otherActorId, { id: otherActorId, role: 'ACCOUNT_HOLDER', isActive: true, tokenVersion: 0 }],
 ]);
 const accounts = new Map([
   [accountA, { id: accountA, accountNumber: 'BV-A', type: 'PERSONAL', status: 'ACTIVE', currencyCode: 'INR', balance: 0n }],
@@ -44,7 +44,7 @@ function fakePrisma() {
     user: {
       async findUnique({ where }) {
         const user = users.get(where.id);
-        return user ? { id: user.id, role: user.role, isActive: user.isActive } : null;
+        return user ? { id: user.id, role: user.role, isActive: user.isActive, tokenVersion: user.tokenVersion } : null;
       },
     },
     async $queryRaw(_strings, userId, type, sourceId, destinationId, amountText, key, hash) {
@@ -126,7 +126,7 @@ let server;
 let baseUrl;
 
 function token(userId = actorId) {
-  return jwt.sign({}, process.env.JWT_ACCESS_SECRET, {
+  return jwt.sign({ ver: 0 }, process.env.JWT_ACCESS_SECRET, {
     algorithm: 'HS256', subject: userId, issuer: JWT_ISSUER, audience: JWT_AUDIENCE, expiresIn: '15m',
   });
 }

@@ -2,6 +2,35 @@
 
 All protected endpoints require `Authorization: Bearer <access-token>`. The API verifies the token and reloads the active user's current role from PostgreSQL. The user ID and role in request bodies, query parameters, and path parameters never establish identity. Amounts are INR paise represented as decimal integer strings where returned.
 
+## Authentication
+
+- `POST /api/auth/register` accepts `{ "name": "Asha Rao", "email": "asha@example.com", "password": "at least 12 characters" }`. It always creates an `ACCOUNT_HOLDER` and returns `201` with `{ accessToken, tokenType, expiresIn, user }`.
+- `POST /api/auth/login` accepts `{ "email": "asha@example.com", "password": "…" }` and returns the same token response. Unknown email, wrong password, and inactive user share a generic `401` response.
+- `POST /api/auth/accept-invitation` accepts `{ "token": "one-time-token", "password": "at least 12 characters" }`. See the invitation section below.
+- `POST /api/auth/change-password` requires authentication and accepts `{ "currentPassword": "…", "newPassword": "at least 12 characters" }`. Current sessions are invalidated; sign in again after a successful change.
+
+Login, registration, invitation acceptance, and password changes use shared Redis rate limits. They fail closed if Redis is unavailable.
+
+## Accounts
+
+- `GET /api/accounts` lists customer accounts available to the caller. ADMIN sees all customer accounts; ACCOUNT_HOLDER and AUDITOR see only accounts with `canView=true`. Clearing accounts are excluded.
+- `GET /api/accounts/{accountId}` returns a visible customer account summary.
+- `GET /api/accounts/{accountId}/balance` returns `{ accountId, balancePaise, currencyCode }`; `balancePaise` is an integer string.
+- `POST /api/accounts` is ADMIN-only and accepts `{ "accountNumber": "BV-10021", "accountType": "PERSONAL", "holderUserId": "uuid" }`. Account and initial view permission are created through a protected PostgreSQL function.
+
+Unknown and unauthorized account IDs return `404` to avoid disclosing account existence. Invalid IDs and request bodies return `400`; a duplicate account number returns `409`.
+
+## Financial transactions
+
+All posting requests require an authenticated caller and an `Idempotency-Key` header. Amounts are positive integer paise; decimal currency amounts are not accepted.
+
+- `POST /api/deposits` accepts `{ "accountId": "uuid", "amountPaise": "12500" }`.
+- `POST /api/withdrawals` accepts `{ "accountId": "uuid", "amountPaise": "5000" }`.
+- `POST /api/transfers` accepts `{ "sourceAccountId": "uuid", "destinationAccountId": "uuid", "amountPaise": "2500" }`.
+- `GET /api/transfers/{transferId}` returns a posted transfer only when the caller can view both customer accounts (ADMIN may read any customer-to-customer transfer).
+
+The database checks operation-specific account capabilities, account status, funds, and transfer eligibility. A repeated idempotency key with the same payload replays its original result; reusing it with different arguments returns `409`. Insufficient funds and other financial refusals are persisted as refused attempts and do not create ledger entries. Backend database errors are returned as generic `500` errors.
+
 ## Account statement
 
 `GET /api/accounts/{accountId}/statement?limit=25&cursor={opaqueCursor}`
@@ -57,7 +86,9 @@ Invalid account IDs, limits, or cursors return `400`; missing authentication ret
 
 `GET /api/audit?page=1&perPage=25`
 
-ADMIN only. Returns immutable audit records ordered by timestamp and ID, newest first. `page` starts at 1. `perPage` defaults to 25 and must be 1 through 100. Actor details contain only ID, email, and current role. Metadata keys associated with credentials, hashes, database connections, or SQL are redacted.
+Permitted roles: `ADMIN` and `AUDITOR`. Returns audit records ordered by timestamp and ID, newest first. `page` starts at 1. `perPage` defaults to 25 and must be 1 through 100.
+
+Admins can view all audit records; their actor details contain ID, email, and current role. Auditors see only records whose entity is an `Account` for an account where they have `canView` permission. Auditor actor details contain only ID and current role. Metadata is recursively redacted for keys associated with passwords, secrets, tokens, hashes, database connections, or SQL for both roles. For auditors, keys associated with email addresses, users, holders, or actors are also redacted. Other roles receive `403`.
 
 Example:
 
@@ -84,4 +115,30 @@ Example:
 }
 ```
 
-Invalid pagination returns `400`, missing authentication returns `401`, and non-admin callers receive `403`.
+Invalid pagination returns `400`, missing authentication returns `401`, and callers other than admins or auditors receive `403`.
+# Profile and onboarding APIs
+
+All routes below require a bearer access token.
+
+- `GET /api/users/me` returns `{ user: { id, fullName, email, role, isActive, createdAt } }`.
+- `PATCH /api/users/me` accepts `{ "fullName": "Updated Name" }`. Email, role, and active status are not editable here.
+- `POST /api/auth/change-password` accepts `{ "currentPassword": "…", "newPassword": "at least 12 characters" }`. It checks the current password, persists the bcrypt hash through a restricted function, invalidates older access tokens, and returns a message requiring a new login.
+- `POST /api/account-requests` accepts `{ "requestedType": "PERSONAL" }` or `BUSINESS`. A duplicate pending request returns `409`.
+- `GET /api/account-requests` returns the caller's requests. `GET /api/account-requests/admin/queue` is ADMIN-only.
+- `POST /api/account-requests/admin/:id/approve` (ADMIN-only) accepts `{ "accountNumber": "…" }`; it uses the existing account creation function inside the request transaction, so the account and initial view permission commit together.
+- `POST /api/account-requests/admin/:id/reject` (ADMIN-only) accepts an optional `{ "note": "…" }`.
+- `GET /api/admin/users?page=1&perPage=25` and `PATCH /api/admin/users/:id/status` are ADMIN-only. The latter accepts only `{ "isActive": true|false }`; role changes remain controlled provisioning.
+
+Common errors are JSON: `400` invalid input, `401` unauthenticated/current password invalid, `403` role denied, `404` unavailable request, and `409` duplicate pending request or account number. Database details are not returned.
+
+## Privileged-user invitations
+
+- `POST /api/admin/invitations` is ADMIN-only and accepts `{ "fullName": "Auditor Name", "email": "auditor@example.com", "role": "AUDITOR" }` (or `ADMIN`). The response contains a 256-bit random, single-use `token`; it is returned only at creation and must be shared securely. Copy the resulting `/accept-invitation#TOKEN` link immediately. PostgreSQL stores only the SHA-256 hash, and the response uses `Cache-Control: no-store`.
+- `GET /api/admin/invitations` lists safe invitation metadata. It never returns token hashes or plaintext tokens.
+- `POST /api/admin/invitations/:id/revoke` revokes an unaccepted invitation. Expired, revoked, and accepted tokens cannot be used.
+- `POST /api/auth/accept-invitation` is public but Redis-rate-limited. It accepts `{ "token": "…", "password": "at least 12 characters" }`. The token is single-use; the API bcrypt-hashes the password before calling PostgreSQL. Success returns the normal safe authentication response.
+- Role provisioning is audited at bootstrap, invitation creation, revocation, acceptance, and role assignment. Only ADMIN and AUDITOR invitations are allowed; public registration remains ACCOUNT_HOLDER-only.
+
+## First administrator bootstrap
+
+The first ADMIN is created only by an operator CLI, never by public registration or the runtime API. Configure `BALANCEVAULT_BOOTSTRAP_DATABASE_URL` for a dedicated login granted membership in `balancevault_bootstrap_operator`; do not use the API runtime login. Run `npm run admin:bootstrap -w apps/api`, confirm the displayed database name, then enter the name, email, and password interactively. Password input is hidden, bcrypt-hashed in the CLI, and only the hash reaches PostgreSQL. The database function is atomic, serialized, single-use, inaccessible to PUBLIC, and not executable by `balancevault_runtime`. The CLI does not fall back to `DATABASE_URL` or `MIGRATION_DATABASE_URL`.

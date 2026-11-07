@@ -128,6 +128,34 @@ a { color: inherit; text-decoration: none; }
 .backend-offline i { background: #d78072; }
 .topbar-divider { width: 1px; height: 24px; background: #e7ebe6; }
 .profile-summary { display: flex; align-items: center; gap: 9px; }
+.profile-menu-wrap { position: relative; }
+.profile-menu-trigger { display: flex; align-items: center; gap: 9px; border: 0; background: transparent; color: #34493c; cursor: pointer; text-align: left; }
+.profile-menu-identity { display: grid; gap: 3px; max-width: 170px; }
+.profile-menu-identity strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-menu-identity small { color: #829087; font-size: 9px; }
+.profile-menu { position: absolute; z-index: 70; top: calc(100% + 9px); right: 0; display: grid; min-width: 180px; padding: 6px; border: 1px solid #e2e9e1; border-radius: 10px; background: white; box-shadow: 0 12px 35px #193b2a1c; }
+.profile-menu button { padding: 10px; border: 0; border-radius: 6px; background: transparent; color: #32483b; cursor: pointer; text-align: left; font: inherit; font-size: 12px; }
+.profile-menu button:hover, .profile-menu button:focus-visible { background: #f1f5f0; }
+.settings-card { display: grid; gap: 16px; margin: 15px 0; padding: 20px; border: 1px solid #e4eae3; border-radius: 12px; background: white; }
+.settings-form { max-width: 620px; }
+.settings-form input, .settings-form select { min-height: 42px; padding: 0 12px; border: 1px solid #dce4dc; border-radius: 8px; background: white; color: #263d31; font: inherit; }
+.form-success { color: #2f7045; font-size: 12px; }
+.admin-list-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.admin-list-row > div, .admin-list-row > strong { display: grid; gap: 5px; }
+.admin-list-row small { color: #7d8b81; font-size: 11px; }
+.invitation-link-panel { grid-template-columns: 1fr auto; align-items: center; }
+.invitation-link-panel > strong, .invitation-link-panel > p, .invitation-link-panel > input { grid-column: 1 / -1; }
+.invitation-link-panel > p { margin: 0; color: #7d8b81; font-size: 11px; }
+.invitation-link-panel > input { width: 100%; min-height: 42px; padding: 0 12px; border: 1px solid #dce4dc; border-radius: 8px; color: #32483b; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.admin-filter-row { display: grid; grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(150px, 1fr)); gap: 14px; margin: 14px 0; }
+.admin-filter-row input, .admin-filter-row select { width: 100%; min-height: 42px; padding: 0 12px; border: 1px solid #dce4dc; border-radius: 8px; background: white; color: #32483b; font: inherit; }
+.onboarding-row { grid-template-columns: minmax(170px, 1fr) minmax(190px, .8fr) auto; align-items: end; }
+.onboarding-row > div:first-child { display: grid; gap: 5px; align-self: center; }
+.onboarding-row > div:first-child small { color: #7d8b81; font-size: 11px; }
+.role-dashboard-panel { padding: 22px; border: 1px solid #e2e9e1; border-radius: 12px; background: white; }
+.role-dashboard-panel h2, .role-dashboard-panel h1 { margin: 7px 0; color: #213b2d; }
+.role-dashboard-panel p { color: #76847a; font-size: 13px; }
+.role-dashboard-actions { display: flex; flex-wrap: wrap; gap: 9px; }
 .avatar { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid #d7e3d8; border-radius: 50%; background: #e6eee4; color: #315c49; font-size: 11px; font-weight: 750; }
 .profile-email { max-width: 190px; overflow: hidden; color: #53635b; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .icon-button { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #77857d; cursor: pointer; }
@@ -411,6 +439,10 @@ a { color: inherit; text-decoration: none; }
   .topbar-divider { height: 20px; }
   .profile-email { display: none; }
   .profile-summary { gap: 0; }
+  .profile-menu-identity { display: none; }
+  .onboarding-row { grid-template-columns: 1fr; }
+  .admin-filter-row { grid-template-columns: 1fr; gap: 10px; }
+  .role-dashboard-actions { align-items: stretch; flex-direction: column; }
   .page-content { padding: 18px 16px 35px; }
   .welcome-panel { min-height: 190px; padding: 24px 21px; }
   .welcome-art { right: -6px; opacity: .58; transform: translate(16%, -50%) scale(.82); }

@@ -7,12 +7,13 @@ const querySchema = z.object({
   perPage: z.coerce.number().int().min(1).max(100).default(25),
 }).strict();
 
-function redactMetadata(value) {
-  if (Array.isArray(value)) return value.map(redactMetadata);
+function redactMetadata(value, auditor = false) {
+  if (Array.isArray(value)) return value.map((item) => redactMetadata(item, auditor));
   if (value === null || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).map(([key, nested]) => {
-    if (/password|secret|token|hash|database|connection|string|sql/i.test(key)) return [key, '[REDACTED]'];
-    return [key, redactMetadata(nested)];
+    if (/password|secret|token|hash|database|connection|string|sql/i.test(key)
+      || (auditor && /email|user|holder|actor/i.test(key))) return [key, '[REDACTED]'];
+    return [key, redactMetadata(nested, auditor)];
   }));
 }
 
@@ -21,7 +22,7 @@ export function createAuditRouter(prismaClient) {
   router.use(createAuthenticate(prismaClient));
 
   router.get('/', async (request, response, next) => {
-    if (request.auth.role !== 'ADMIN') {
+    if (!['ADMIN', 'AUDITOR'].includes(request.auth.role)) {
       response.status(403).json({ error: 'Forbidden' });
       return;
     }
@@ -33,7 +34,17 @@ export function createAuditRouter(prismaClient) {
 
     const { page, perPage } = parsed.data;
     try {
+      let where;
+      if (request.auth.role === 'AUDITOR') {
+        const permissions = await prismaClient.accountPermission.findMany({
+          where: { userId: request.auth.userId, canView: true },
+          select: { accountId: true },
+        });
+        const accountIds = permissions.map(({ accountId }) => accountId);
+        where = { entityType: 'Account', entityId: { in: accountIds } };
+      }
       const events = await prismaClient.auditLog.findMany({
+        where,
         skip: (page - 1) * perPage,
         take: perPage + 1,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -51,7 +62,10 @@ export function createAuditRouter(prismaClient) {
       response.json({
         events: events.slice(0, perPage).map((event) => ({
           ...event,
-          metadata: redactMetadata(event.metadata),
+          actor: request.auth.role === 'AUDITOR'
+            ? { id: event.actor.id, role: event.actor.role }
+            : event.actor,
+          metadata: redactMetadata(event.metadata, request.auth.role === 'AUDITOR'),
         })),
         page,
         perPage,

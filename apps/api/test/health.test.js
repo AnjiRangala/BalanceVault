@@ -30,6 +30,10 @@ after(async () => {
 test('GET /api/health reports application health', async () => {
   const response = await fetch(`${baseUrl}/api/health`);
   assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(response.headers.get('x-frame-options'), 'DENY');
+  assert.equal(response.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+  assert.equal(response.headers.get('x-powered-by'), null);
   assert.deepEqual(await response.json(), {
     application: 'BalanceVault',
     status: 'healthy',

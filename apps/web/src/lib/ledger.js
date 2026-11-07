@@ -31,7 +31,12 @@ export function navigationForRole(role) {
     { path: '/dashboard', label: 'Overview', icon: 'grid' },
     { path: '/accounts', label: 'Accounts', icon: 'cards' },
     { path: '/statements', label: 'Statements', icon: 'activity' },
-    ...(role === 'ADMIN' ? [{ path: '/audit', label: 'Audit log', icon: 'shield' }] : []),
+    ...(role === 'ACCOUNT_HOLDER' ? [{ path: '/account-requests', label: 'Account request', icon: 'plus' }] : []),
+    ...(role === 'ADMIN' ? [
+      { path: '/admin/users', label: 'User management', icon: 'building' },
+      { path: '/admin/onboarding', label: 'Onboarding', icon: 'cards' },
+      { path: '/audit', label: 'Audit log', icon: 'shield' },
+    ] : role === 'AUDITOR' ? [{ path: '/audit', label: 'Audit log', icon: 'shield' }] : []),
   ];
 }
 

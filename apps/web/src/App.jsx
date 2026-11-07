@@ -81,25 +81,37 @@ function PasswordField({ label = 'Password', value, onChange, autoComplete = 'cu
 
 function AuthPage({ mode }) {
   const isRegister = mode === 'register';
-  const { login, register } = useAuth();
+  const isInvitation = mode === 'invitation';
+  const { login, register, acceptInvitation } = useAuth();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event) {
     event.preventDefault();
     setError('');
-    if (isRegister && password.length < 12) {
+    if ((isRegister || isInvitation) && password.length < 12) {
       setError('Use a password with at least 12 characters.');
+      return;
+    }
+    if ((isRegister || isInvitation) && password !== confirmation) {
+      setError('Passwords do not match.');
       return;
     }
     setSubmitting(true);
     try {
       if (isRegister) await register({ name, email, password });
+      else if (isInvitation) {
+        const token = window.location.hash.slice(1);
+        if (!token) throw new Error('Invitation token is missing. Open the complete invitation link.');
+        await acceptInvitation({ token, password });
+      }
       else await login({ email, password });
       setPassword('');
+      setConfirmation('');
       navigate('/dashboard', true);
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : 'We could not sign you in. Please try again.');
@@ -130,22 +142,24 @@ function AuthPage({ mode }) {
         <div className="auth-mobile-brand"><Brand /></div>
         <div className="auth-form-card">
           <div className="form-heading">
-            <span className="form-kicker">{isRegister ? 'GET STARTED' : 'WELCOME BACK'}</span>
-            <h2>{isRegister ? 'Create your account' : 'Sign in to your vault'}</h2>
-            <p>{isRegister ? 'Set up your secure account in a few steps.' : 'Your accounts, clearly in view.'}</p>
+            <span className="form-kicker">{isRegister ? 'GET STARTED' : isInvitation ? 'SECURE INVITATION' : 'WELCOME BACK'}</span>
+            <h2>{isRegister ? 'Create your account' : isInvitation ? 'Set your password' : 'Sign in to your vault'}</h2>
+            <p>{isRegister ? 'Set up your secure account in a few steps.' : isInvitation ? 'Choose a password to activate your invited BalanceVault role.' : 'Your accounts, clearly in view.'}</p>
           </div>
 
           <form className="auth-form" onSubmit={handleSubmit}>
             {isRegister && <label className="field-label"><span>Full name</span><input required type="text" value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" maxLength={100} placeholder="Your name" /></label>}
-            <label className="field-label"><span>Email address</span><input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" maxLength={254} placeholder="you@example.com" /></label>
-            <PasswordField value={password} onChange={setPassword} autoComplete={isRegister ? 'new-password' : 'current-password'} hint={isRegister ? 'Use 12 or more characters.' : null} />
+            {!isInvitation && <label className="field-label"><span>Email address</span><input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" maxLength={254} placeholder="you@example.com" /></label>}
+            {!isInvitation && <PasswordField value={password} onChange={setPassword} autoComplete={isRegister ? 'new-password' : 'current-password'} hint={isRegister ? 'Use 12 or more characters.' : null} />}
+            {isInvitation && <PasswordField label="New password" value={password} onChange={setPassword} autoComplete="new-password" hint="Use 12 or more characters." />}
+            {(isRegister || isInvitation) && <PasswordField label="Confirm password" value={confirmation} onChange={setConfirmation} autoComplete="new-password" hint={null} />}
             {error && <div className="form-error" role="alert"><span>!</span>{error}</div>}
             <button className="button button-primary auth-submit" type="submit" disabled={submitting}>
-              {submitting ? <><span className="spinner" />{isRegister ? 'Creating account…' : 'Signing in…'}</> : <>{isRegister ? 'Create account' : 'Sign in'}<Icon name="arrow" size={18} /></>}
+              {submitting ? <><span className="spinner" />{isRegister ? 'Creating account…' : isInvitation ? 'Accepting invitation…' : 'Signing in…'}</> : <>{isRegister ? 'Create account' : isInvitation ? 'Accept invitation' : 'Sign in'}<Icon name="arrow" size={18} /></>}
             </button>
           </form>
 
-          <p className="auth-switch">{isRegister ? 'Already have an account?' : 'New to BalanceVault?'} <button type="button" onClick={() => navigate(isRegister ? '/login' : '/register')}>{isRegister ? 'Sign in' : 'Create an account'}</button></p>
+          {!isInvitation && <p className="auth-switch">{isRegister ? 'Already have an account?' : 'New to BalanceVault?'} <button type="button" onClick={() => navigate(isRegister ? '/login' : '/register')}>{isRegister ? 'Sign in' : 'Create an account'}</button></p>}
           <div className="secure-note"><Icon name="lock" size={15} /><span>Your connection is protected. We never display or store your password in the browser after signing in.</span></div>
         </div>
         <p className="auth-legal">BalanceVault · Secure financial ledger</p>
@@ -170,8 +184,8 @@ function BackendBadge() {
 
 const roleLabels = { ADMIN: 'Administrator', ACCOUNT_HOLDER: 'Account holder', AUDITOR: 'Auditor' };
 
-function AppShell({ pathname }) {
-  const { user, logout, request, accountRefreshVersion, refreshAccounts, selectedAccountId, setSelectedAccountId } = useAuth();
+function AppShell({ pathname, forbidden = false }) {
+  const { user, logout, request, updateUser, accountRefreshVersion, refreshAccounts, selectedAccountId, setSelectedAccountId } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -199,16 +213,22 @@ function AppShell({ pathname }) {
       <div className="main-column">
         <header className="topbar">
           <div className="topbar-leading"><button className="mobile-menu-button" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation"><span /><span /><span /></button><div className="breadcrumb"><span>Workspace</span><b>/</b><strong>{pathname.startsWith('/accounts/') ? 'Account details' : pathname.startsWith('/transactions/') ? pathname.split('/')[2]?.[0]?.toUpperCase() + pathname.split('/')[2]?.slice(1) : pathname.startsWith('/transfers/') ? 'Transfer details' : pathname === '/accounts' ? 'Accounts' : pathname === '/statements' ? 'Statements' : pathname === '/audit' ? 'Audit log' : 'Overview'}</strong></div></div>
-          <div className="topbar-actions"><BackendBadge /><span className="topbar-divider" /><div className="profile-summary"><span className="avatar">{user.email[0]?.toUpperCase()}</span><span className="profile-email">{user.email}</span></div><button className="icon-button signout-button" onClick={signOut} title="Sign out" aria-label="Sign out"><Icon name="logout" size={18} /></button></div>
+          <div className="topbar-actions"><BackendBadge /><span className="topbar-divider" /><ProfileMenu user={user} signOut={signOut} /></div>
         </header>
         <main className="page-content">
           <Suspense fallback={<div className="loading-row" role="status"><span className="spinner spinner-dark" />Loading workspace</div>}>
-          {pathname === '/accounts' ? <AccountsPage request={request} isAdmin={isAdmin} accountRefreshVersion={accountRefreshVersion} refreshAccounts={refreshAccounts} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
+          {pathname === '/accounts' ? <AccountsPage request={request} isAdmin={isAdmin} userRole={user.role} accountRefreshVersion={accountRefreshVersion} refreshAccounts={refreshAccounts} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
+            : forbidden ? <section className="section-block role-dashboard-panel"><span className="section-kicker">ACCESS RESTRICTED</span><h1>Access denied</h1><p>Your current role cannot open this page.</p><button className="button button-outline" onClick={() => navigate('/dashboard')}>Return to overview</button></section>
+            : pathname === '/profile' || pathname === '/settings' ? <ProfilePage request={request} user={user} updateUser={updateUser} />
+              : pathname === '/settings/security' ? <SecurityPage request={request} onChanged={signOut} />
+                : pathname === '/account-requests' ? <AccountRequestPage request={request} />
+                  : pathname === '/admin/users' && isAdmin ? <AdminUsersPage request={request} />
+                    : pathname === '/admin/onboarding' && isAdmin ? <OnboardingPage request={request} refreshAccounts={refreshAccounts} />
             : pathname === '/statements' ? <StatementPage request={request} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
             : pathname.startsWith('/accounts/') ? <AccountDetailsPage accountId={pathname.split('/')[2]} request={request} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
               : pathname.startsWith('/transactions/') ? <FinancialTransactionPage type={pathname.split('/')[2]} onNavigate={navigate} />
               : pathname.startsWith('/transfers/') ? <TransferDetailsPage request={request} transferId={pathname.split('/')[2]} onNavigate={navigate} />
-                : pathname === '/audit' && isAdmin ? <AuditPage request={request} /> : <DashboardPage request={request} user={user} accountRefreshVersion={accountRefreshVersion} />}
+                : pathname === '/audit' && ['ADMIN', 'AUDITOR'].includes(user.role) ? <AuditPage request={request} /> : <DashboardPage request={request} user={user} accountRefreshVersion={accountRefreshVersion} />}
           </Suspense>
         </main>
         <footer className="app-footer"><span>BalanceVault <i>·</i> Financial clarity, by design.</span><span className="footer-secure"><Icon name="lock" size={13} /> Secure session</span></footer>
@@ -227,7 +247,7 @@ function DashboardPage({ request, user, accountRefreshVersion }) {
       .catch((requestError) => { if (requestError.name !== 'AbortError') setError(requestError.message); });
     return () => controller.abort();
   }, [accountRefreshVersion, request]);
-  const firstName = user.email.split('@')[0];
+  const firstName = user.fullName?.split(/\s+/)[0] || user.email.split('@')[0];
   const activeCount = accounts?.filter((account) => account.status === 'ACTIVE').length ?? 0;
 
   return (
@@ -250,21 +270,22 @@ function DashboardPage({ request, user, accountRefreshVersion }) {
       <div className="dashboard-lower-grid">
         <section className="section-block account-list-block">
           <div className="section-heading compact-heading"><div><span className="section-kicker">CONNECTED</span><h2>Your accounts</h2></div><button className="square-link" onClick={() => navigate('/accounts')} aria-label="View all accounts"><Icon name="arrow" size={17} /></button></div>
-          {accounts === null ? <div className="loading-row"><span className="spinner spinner-dark" />Loading accounts</div> : accounts.length === 0 ? <EmptyState title="No accounts yet" detail="Accounts you can access will appear here." /> : <div className="account-list">{accounts.slice(0, 4).map((account) => <AccountRow key={account.id} account={account} />)}</div>}
+          {accounts === null ? <div className="loading-row"><span className="spinner spinner-dark" />Loading accounts</div> : accounts.length === 0 ? <><EmptyState title="No accounts yet" detail="Customer accounts are opened after an administrator reviews your request." />{user.role === 'ACCOUNT_HOLDER' && <button className="button button-outline" onClick={() => navigate('/account-requests')}>Request an account</button>}</> : <div className="account-list">{accounts.slice(0, 4).map((account) => <AccountRow key={account.id} account={account} />)}</div>}
           {accounts?.length > 4 && <button className="view-all-link" onClick={() => navigate('/accounts')}>View all {accounts.length} accounts <Icon name="arrow" size={15} /></button>}
         </section>
 
-        <section className="section-block quick-actions-block">
+        {user.role === 'ACCOUNT_HOLDER' && <section className="section-block quick-actions-block">
           <div className="section-heading compact-heading"><div><span className="section-kicker">ON YOUR TERMS</span><h2>Quick actions</h2></div></div>
           <div className="quick-actions">
             <ActionCard title="Deposit" label="Add funds" tone="sage" onClick={() => navigate('/transactions/deposit')} />
             <ActionCard title="Withdraw" label="Move funds out" tone="cream" onClick={() => navigate('/transactions/withdrawal')} />
             <ActionCard title="Transfer" label="Between accounts" tone="lavender" onClick={() => navigate('/transactions/transfer')} />
           </div>
-          <p className="coming-note"><span />Money movement will be available here soon.</p>
-        </section>
+        </section>}
       </div>
 
+      {user.role === 'ADMIN' && <section className="section-block role-dashboard-panel"><span className="section-kicker">ADMINISTRATION</span><h2>Operations workspace</h2><p>Review account opening requests, manage user access, and inspect the audit trail.</p><div className="role-dashboard-actions"><button className="button button-outline" onClick={() => navigate('/admin/onboarding')}>Review onboarding</button><button className="button button-outline" onClick={() => navigate('/admin/users')}>Manage users</button><button className="button button-outline" onClick={() => navigate('/audit')}>View audit log</button></div></section>}
+      {user.role === 'AUDITOR' && <section className="section-block role-dashboard-panel"><span className="section-kicker">READ ONLY</span><h2>Audit workspace</h2><p>Review assigned-account statements and the audit events available to your role.</p><button className="button button-outline" onClick={() => navigate('/audit')}>Open audit log</button></section>}
       <DashboardActivity request={request} accounts={accounts} />
     </>
   );
@@ -292,7 +313,7 @@ function DashboardActivity({ request, accounts }) {
   </section>;
 }
 
-function AccountsPage({ request, isAdmin, accountRefreshVersion, refreshAccounts, selectedAccountId, setSelectedAccountId }) {
+function AccountsPage({ request, isAdmin, userRole, accountRefreshVersion, refreshAccounts, selectedAccountId, setSelectedAccountId }) {
   const [accounts, setAccounts] = useState(null);
   const [balances, setBalances] = useState({});
   const [error, setError] = useState('');
@@ -350,7 +371,7 @@ function AccountsPage({ request, isAdmin, accountRefreshVersion, refreshAccounts
       {isAdmin && showCreateForm && <CreateAccountForm request={request} onCreated={(account) => { refreshAccounts(); setSelectedAccountId(account.id); setShowCreateForm(false); }} />}
       {error && <ErrorPanel message={error} onRetry={retry} />}
       {loading && accounts === null ? <div className="loading-row"><span className="spinner spinner-dark" />Loading accounts</div>
-        : !error && accounts?.length === 0 ? <EmptyState title="No accounts available" detail="Accounts you are permitted to view will appear here." />
+        : !error && accounts?.length === 0 ? <><EmptyState title="No accounts available" detail="Accounts you are permitted to view will appear here." />{userRole === 'ACCOUNT_HOLDER' && <button className="button button-outline" onClick={() => navigate('/account-requests')}>Request an account for review</button>}</>
           : <div className="accounts-grid">{accounts?.map((account) => <AccountCard key={account.id} account={account} balance={balances[account.id]} selected={selectedAccountId === account.id} onSelect={() => setSelectedAccountId(account.id)} />)}</div>}
       {!loading && !error && accounts?.length > 0 && Object.values(balances).some((item) => item.error) && <p className="balance-access-note" role="status">Some balance details could not be loaded. Retry the page to check again.</p>}
       {accounts?.length > 0 && <p className="selection-help">Select an account to prefill future deposit, withdrawal, and transfer forms. This selection does not grant access; the API checks permissions for every request.</p>}
@@ -472,6 +493,96 @@ function ActionCard({ title, label, tone, onClick }) {
   return <button className={`action-card action-${tone}`} type="button" onClick={onClick} aria-label={`${title} transaction`}><span className="action-icon"><Icon name="plus" size={19} /></span><span className="action-title">{title}</span><span className="action-label">{label}</span><span className="action-soon">OPEN</span></button>;
 }
 
+function ProfileMenu({ user, signOut }) {
+  const [open, setOpen] = useState(false);
+  return <div className="profile-menu-wrap">
+    <button className="profile-menu-trigger" aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((value) => !value)}>
+      <span className="avatar">{(user.fullName?.[0] || user.email[0] || '?').toUpperCase()}</span>
+      <span className="profile-menu-identity"><strong>{user.fullName || user.email}</strong><small>{roleLabels[user.role] ?? user.role}</small></span>
+      <span aria-hidden="true">⌄</span>
+    </button>
+    {open && <div className="profile-menu" role="menu">
+      <button role="menuitem" onClick={() => { setOpen(false); navigate('/profile'); }}>Profile</button>
+      <button role="menuitem" onClick={() => { setOpen(false); navigate('/settings'); }}>Settings</button>
+      <button role="menuitem" onClick={() => { setOpen(false); navigate('/settings/security'); }}>Security</button>
+      <button role="menuitem" onClick={signOut}>Sign out</button>
+    </div>}
+  </div>;
+}
+
+function ProfilePage({ request, user, updateUser }) {
+  const [profile, setProfile] = useState(null); const [name, setName] = useState(user.fullName ?? '');
+  const [message, setMessage] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
+  async function load() { setError(''); try { const result = await request('/api/users/me'); setProfile(result.user); setName(result.user.fullName ?? ''); } catch (err) { setError(err.message || 'Profile could not be loaded.'); } }
+  useEffect(() => { load(); }, []);
+  async function save(event) { event.preventDefault(); setBusy(true); setError(''); setMessage(''); try { const result = await request('/api/users/me', { method: 'PATCH', body: { fullName: name.trim() } }); setProfile(result.user); updateUser(result.user); setMessage('Profile updated.'); } catch (err) { setError(err.message || 'Profile could not be updated.'); } finally { setBusy(false); } }
+  return <section className="section-block full-page-block"><div className="page-title-row"><div><span className="section-kicker">YOUR ACCOUNT</span><h1>Profile</h1><p>Review and update your personal details.</p></div></div>
+    {!profile && !error && <div className="loading-row"><span className="spinner spinner-dark" />Loading profile</div>}
+    {error && <div className="form-error" role="alert">{error}<button type="button" onClick={load}>Retry</button></div>}
+    {profile && <form className="settings-card settings-form" onSubmit={save}><label className="field-label"><span>Full name</span><input value={name} onChange={(event) => setName(event.target.value)} minLength={1} maxLength={100} required /></label><label className="field-label"><span>Email</span><input value={profile.email} readOnly /></label><label className="field-label"><span>Role</span><input value={roleLabels[profile.role] ?? profile.role} readOnly /></label><label className="field-label"><span>Account status</span><input value={profile.isActive ? 'Active' : 'Inactive'} readOnly /></label><label className="field-label"><span>Member since</span><input value={formatDate(profile.createdAt)} readOnly /></label>{message && <p className="form-success" role="status">{message}</p>}<button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button><button className="button button-outline" type="button" onClick={() => navigate('/settings/security')}>Security settings</button></form>}
+  </section>;
+}
+
+function SecurityPage({ request, onChanged }) {
+  const [currentPassword, setCurrentPassword] = useState(''); const [newPassword, setNewPassword] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
+  async function submit(event) { event.preventDefault(); setError(''); setBusy(true); try { await request('/api/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } }); setCurrentPassword(''); setNewPassword(''); onChanged(); } catch (err) { setError(err.message || 'Password could not be changed.'); } finally { setBusy(false); } }
+  return <section className="section-block full-page-block"><div className="page-title-row"><div><span className="section-kicker">ACCOUNT SECURITY</span><h1>Security</h1><p>Changing your password signs out existing sessions.</p></div></div><form className="settings-card settings-form" onSubmit={submit}><label className="field-label"><span>Current password</span><input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label><label className="field-label"><span>New password</span><input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label>{error && <div className="form-error" role="alert">{error}</div>}<button className="button button-primary" disabled={busy}>{busy ? 'Updating…' : 'Change password'}</button></form></section>;
+}
+
+function AccountRequestPage({ request }) {
+  const [items, setItems] = useState(null); const [type, setType] = useState('PERSONAL'); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [version, setVersion] = useState(0);
+  useEffect(() => { const controller = new AbortController(); request('/api/account-requests', { signal: controller.signal }).then((data) => setItems(data.requests)).catch((err) => { if (err.name !== 'AbortError') setError(err.message); }); return () => controller.abort(); }, [request, version]);
+  async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await request('/api/account-requests', { method: 'POST', body: { requestedType: type } }); setVersion((value) => value + 1); } catch (err) { setError(err.message || 'Request could not be submitted.'); } finally { setBusy(false); } }
+  return <section className="section-block full-page-block"><div className="page-title-row"><div><span className="section-kicker">ONBOARDING</span><h1>Account request</h1><p>Customer accounts are opened after administrator review.</p></div></div><form className="settings-card onboarding-request-form" onSubmit={submit}><label className="field-label"><span>Requested account type</span><select value={type} onChange={(event) => setType(event.target.value)}><option value="PERSONAL">Personal</option><option value="BUSINESS">Business</option></select></label>{error && <div className="form-error" role="alert">{error}</div>}<button className="button button-primary" disabled={busy}>{busy ? 'Submitting…' : 'Submit request'}</button></form><h2 className="ledger-subheading">Your requests</h2>{items === null ? <div className="loading-row">Loading requests…</div> : items.length === 0 ? <EmptyState title="No requests yet" detail="Submitted account requests and their decisions appear here." /> : <div className="settings-card">{items.map((item) => <div className="admin-list-row" key={item.id}><strong>{item.requestedType} account</strong><span className={`status-pill status-${item.status.toLowerCase()}`}>{item.status}</span><small>{formatDate(item.createdAt)}</small>{item.reviewNote && <p>{item.reviewNote}</p>}</div>)}</div>}</section>;
+}
+
+function AdminUsersPage({ request }) {
+  const [data, setData] = useState(null); const [invitations, setInvitations] = useState(null); const [error, setError] = useState(''); const [version, setVersion] = useState(0);
+  const [fullName, setFullName] = useState(''); const [email, setEmail] = useState(''); const [role, setRole] = useState('AUDITOR');
+  const [search, setSearch] = useState(''); const [roleFilter, setRoleFilter] = useState(''); const [statusFilter, setStatusFilter] = useState('');
+  const [busy, setBusy] = useState(false); const [createdInvitation, setCreatedInvitation] = useState(null); const [notice, setNotice] = useState('');
+  useEffect(() => {
+    const controller = new AbortController();
+    Promise.all([
+      request(`/api/admin/users?${new URLSearchParams({ page: '1', perPage: '50', ...(search ? { search } : {}), ...(roleFilter ? { role: roleFilter } : {}), ...(statusFilter ? { status: statusFilter } : {}) })}`, { signal: controller.signal }),
+      request('/api/admin/invitations', { signal: controller.signal }),
+    ]).then(([users, inviteData]) => { setData(users); setInvitations(inviteData.invitations); setError(''); })
+      .catch((err) => { if (err.name !== 'AbortError') setError(err.message); });
+    return () => controller.abort();
+  }, [request, version, search, roleFilter, statusFilter]);
+  async function toggle(user) { setError(''); try { await request(`/api/admin/users/${user.id}/status`, { method: 'PATCH', body: { isActive: !user.isActive } }); setVersion((v) => v + 1); } catch (err) { setError(err.message || 'User status could not be changed.'); } }
+  async function createInvitation(event) {
+    event.preventDefault(); setBusy(true); setError(''); setNotice(''); setCreatedInvitation(null);
+    try {
+      const result = await request('/api/admin/invitations', { method: 'POST', body: { fullName, email, role } });
+      setCreatedInvitation(result.invitation); setFullName(''); setEmail(''); setVersion((v) => v + 1);
+      setNotice('Invitation created. Copy its link now; the token is shown only once.');
+    } catch (err) { setError(err.message || 'Invitation could not be created.'); }
+    finally { setBusy(false); }
+  }
+  async function revoke(invitation) {
+    setError(''); setNotice('');
+    try { await request(`/api/admin/invitations/${invitation.id}/revoke`, { method: 'POST', body: {} }); setVersion((v) => v + 1); setNotice('Invitation revoked.'); }
+    catch (err) { setError(err.message || 'Invitation could not be revoked.'); }
+  }
+  const invitationLink = createdInvitation ? `${window.location.origin}/accept-invitation#${createdInvitation.token}` : '';
+  return <section className="section-block full-page-block"><div className="page-title-row"><div><span className="section-kicker">ADMINISTRATION</span><h1>User management</h1><p>Customers register publicly; privileged roles require an administrator invitation.</p></div></div>
+    {error && <div className="form-error" role="alert">{error}<button onClick={() => setVersion((v) => v + 1)}>Retry</button></div>}{notice && <p className="form-success" role="status">{notice}</p>}
+    <form className="settings-card settings-form" onSubmit={createInvitation}><h2>Invite an administrator or auditor</h2><label className="field-label"><span>Full name</span><input value={fullName} onChange={(event) => setFullName(event.target.value)} maxLength={100} required /></label><label className="field-label"><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} maxLength={254} required /></label><label className="field-label"><span>Role</span><select value={role} onChange={(event) => setRole(event.target.value)}><option value="AUDITOR">Auditor</option><option value="ADMIN">Administrator</option></select></label><button className="button button-primary" disabled={busy}>{busy ? 'Creating invitation…' : 'Create invitation'}</button></form>
+    {createdInvitation && <div className="settings-card invitation-link-panel"><strong>Share this invitation link securely</strong><p>This link expires {formatDate(createdInvitation.expiresAt)} and can be accepted once.</p><input aria-label="One-time invitation link" readOnly value={invitationLink} onFocus={(event) => event.target.select()} /><button className="button button-outline" onClick={async () => { try { await navigator.clipboard.writeText(invitationLink); setNotice('Invitation link copied.'); } catch { setNotice('Select and copy the invitation link.'); } }}>Copy link</button></div>}
+    <h2 className="ledger-subheading">Users</h2><div className="admin-filter-row"><label className="field-label"><span>Search name or email</span><input value={search} onChange={(event) => setSearch(event.target.value)} maxLength={100} /></label><label className="field-label"><span>Role</span><select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}><option value="">All roles</option><option value="ACCOUNT_HOLDER">Account holder</option><option value="ADMIN">Administrator</option><option value="AUDITOR">Auditor</option></select></label><label className="field-label"><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label></div>
+    {!data && !error && <div className="loading-row">Loading users…</div>}{data?.users.length === 0 && <EmptyState title="No users found" detail="Try a different search or filter." />}{data?.users.map((person) => <article className="admin-list-row settings-card" key={person.id}><div><strong>{person.fullName || person.email}</strong><small>{person.email} · {roleLabels[person.role]} · Joined {formatDate(person.createdAt)}</small></div><span className={`status-pill status-${person.isActive ? 'active' : 'closed'}`}>{person.isActive ? 'Active' : 'Inactive'}</span>{person.role !== 'ADMIN' && <button className="button button-outline" onClick={() => toggle(person)}>{person.isActive ? 'Deactivate' : 'Reactivate'}</button>}</article>)}
+    <h2 className="ledger-subheading">Invitations</h2>{!invitations && !error && <div className="loading-row">Loading invitations…</div>}{invitations?.length === 0 && <EmptyState title="No invitations" detail="Invitations you create will appear here." />}{invitations?.map((invitation) => { const status = invitation.acceptedAt ? 'Accepted' : invitation.revokedAt ? 'Revoked' : new Date(invitation.expiresAt) <= new Date() ? 'Expired' : 'Pending'; return <article className="admin-list-row settings-card" key={invitation.id}><div><strong>{invitation.fullName} · {roleLabels[invitation.role]}</strong><small>{invitation.email} · Expires {formatDate(invitation.expiresAt)}</small></div><span className={`status-pill status-${status.toLowerCase()}`}>{status}</span>{status === 'Pending' && <button className="button button-outline" onClick={() => revoke(invitation)}>Revoke</button>}</article>; })}
+  </section>;
+}
+
+function OnboardingPage({ request, refreshAccounts }) {
+  const [items, setItems] = useState(null); const [error, setError] = useState(''); const [version, setVersion] = useState(0); const [numbers, setNumbers] = useState({});
+  useEffect(() => { const controller = new AbortController(); request('/api/account-requests/admin/queue', { signal: controller.signal }).then((data) => setItems(data.requests)).catch((err) => { if (err.name !== 'AbortError') setError(err.message); }); return () => controller.abort(); }, [request, version]);
+  async function decide(item, decision) { setError(''); try { if (decision === 'approve') { const accountNumber = numbers[item.id]?.trim(); if (!accountNumber) { setError('Enter an account number before approval.'); return; } await request(`/api/account-requests/admin/${item.id}/approve`, { method: 'POST', body: { accountNumber } }); refreshAccounts(); } else await request(`/api/account-requests/admin/${item.id}/reject`, { method: 'POST', body: { note: 'Reviewed by administrator' } }); setVersion((v) => v + 1); } catch (err) { setError(err.message || 'The request could not be resolved.'); } }
+  return <section className="section-block full-page-block"><div className="page-title-row"><div><span className="section-kicker">ADMINISTRATION</span><h1>Account onboarding</h1><p>Approved accounts are created atomically with view permission for the requester.</p></div></div>{error && <div className="form-error" role="alert">{error}</div>}{!items && !error && <div className="loading-row">Loading requests…</div>}{items?.length === 0 && <EmptyState title="No requests awaiting review" detail="Pending customer requests will appear here." />}{items?.map((item) => <article className="settings-card onboarding-row" key={item.id}><div><strong>{item.user.fullName || item.user.email}</strong><small>{item.user.email} · {item.requestedType} · {formatDate(item.createdAt)}</small></div><label className="field-label"><span>Account number</span><input value={numbers[item.id] ?? ''} onChange={(event) => setNumbers((current) => ({ ...current, [item.id]: event.target.value }))} maxLength={64} /></label><div className="role-dashboard-actions"><button className="button button-primary" onClick={() => decide(item, 'approve')}>Approve and open</button><button className="button button-outline" onClick={() => decide(item, 'reject')}>Reject</button></div></article>)}</section>;
+}
+
 function EmptyState({ title, detail, icon = 'cards' }) {
   return <div className="empty-state"><span className="empty-icon"><Icon name={icon} size={20} /></span><strong>{title}</strong><p>{detail}</p></div>;
 }
@@ -483,21 +594,28 @@ function formatDate(value) {
 function AppRouter() {
   const pathname = usePathname();
   const { isAuthenticated, user } = useAuth();
-  const publicRoute = pathname === '/login' || pathname === '/register';
+  const publicRoute = pathname === '/login' || pathname === '/register' || pathname === '/accept-invitation';
   const accountDetailRoute = /^\/accounts\/[^/]+$/.test(pathname);
   const transactionRoute = /^\/transactions\/(deposit|withdrawal|transfer)$/.test(pathname);
   const transferDetailRoute = /^\/transfers\/[^/]+$/.test(pathname);
-  const knownRoute = ['/login', '/register', '/dashboard', '/accounts', '/statements', '/audit'].includes(pathname) || accountDetailRoute || transactionRoute || transferDetailRoute;
+  const knownRoute = ['/login', '/register', '/accept-invitation', '/dashboard', '/accounts', '/statements', '/audit', '/profile', '/settings', '/settings/security', '/account-requests', '/admin/users', '/admin/onboarding'].includes(pathname) || accountDetailRoute || transactionRoute || transferDetailRoute;
+  const forbidden = Boolean(user) && (
+    (pathname === '/account-requests' && user.role !== 'ACCOUNT_HOLDER')
+    || (pathname.startsWith('/admin/') && user.role !== 'ADMIN')
+    || (pathname === '/audit' && !['ADMIN', 'AUDITOR'].includes(user.role))
+    || (transactionRoute && user.role !== 'ACCOUNT_HOLDER')
+  );
 
   useEffect(() => {
     if (!isAuthenticated && !publicRoute) navigate('/login', true);
     else if (isAuthenticated && publicRoute) navigate('/dashboard', true);
     else if (!knownRoute) {
       navigate(isAuthenticated ? '/dashboard' : '/login', true);
-    } else if (pathname === '/audit' && user?.role !== 'ADMIN') navigate('/dashboard', true);
+    }
   }, [isAuthenticated, knownRoute, pathname, publicRoute, user?.role]);
 
-  if (!isAuthenticated) return <AuthPage key={pathname === '/register' ? 'register' : 'login'} mode={pathname === '/register' ? 'register' : 'login'} />;
+  if (!isAuthenticated) return <AuthPage key={pathname === '/register' ? 'register' : pathname === '/accept-invitation' ? 'invitation' : 'login'} mode={pathname === '/register' ? 'register' : pathname === '/accept-invitation' ? 'invitation' : 'login'} />;
+  if (forbidden) return <AppShell pathname={pathname} forbidden />;
   return <AppShell pathname={pathname} />;
 }
 

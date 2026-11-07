@@ -29,7 +29,7 @@ let server;
 let baseUrl;
 
 function accessToken(userId) {
-  return jwt.sign({}, process.env.JWT_ACCESS_SECRET, {
+  return jwt.sign({ ver: 0 }, process.env.JWT_ACCESS_SECRET, {
     algorithm: 'HS256',
     subject: userId,
     issuer: JWT_ISSUER,
@@ -242,7 +242,11 @@ test('financial HTTP endpoints persist through the PostgreSQL runtime role', {
   const clearingAccount = await admin.query(`SELECT id FROM public."Account" WHERE "systemCode"='CLEARING_DEPOSIT_INR'`);
   assert.equal((await apiGet(`/api/accounts/${accountA}/statement`, adminId)).status, 200);
   assert.equal((await apiGet('/api/audit?perPage=100', adminId)).status, 200);
-  assert.equal((await apiGet('/api/audit', auditorId)).status, 403);
+  const auditorAuditResponse = await apiGet('/api/audit', auditorId);
+  assert.equal(auditorAuditResponse.status, 200);
+  const auditorAudit = await auditorAuditResponse.json();
+  assert.ok(auditorAudit.events.every((event) => event.entityType === 'Account' && event.entityId === accountA));
+  assert.ok(auditorAudit.events.every((event) => !Object.hasOwn(event.actor, 'email')));
   assert.equal((await apiGet(`/api/accounts/${clearingAccount.rows[0].id}/statement`, adminId)).status, 404);
 
   const auditResponse = await apiGet('/api/audit?perPage=100', adminId);

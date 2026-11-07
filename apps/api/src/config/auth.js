@@ -19,4 +19,8 @@ export function getJwtAccessSecret() {
 
 export function validateAuthConfig() {
   getJwtAccessSecret();
+  const actorKey = process.env.BALANCEVAULT_ACTOR_ASSERTION_KEY;
+  if (typeof actorKey !== 'string' || !/^(?:[a-f0-9]{2}){32,}$/i.test(actorKey)) {
+    throw new Error('BALANCEVAULT_ACTOR_ASSERTION_KEY must be at least 32 bytes encoded as hex');
+  }
 }

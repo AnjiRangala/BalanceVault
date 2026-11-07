@@ -29,8 +29,10 @@ test('audit pagination uses the existing page and perPage contract', () => {
   assert.equal(url.searchParams.get('perPage'), '40');
 });
 
-test('audit navigation is presented only for ADMIN', () => {
-  assert.deepEqual(navigationForRole('ADMIN').map((item) => item.path), ['/dashboard', '/accounts', '/statements', '/audit']);
-  assert.equal(navigationForRole('AUDITOR').some((item) => item.path === '/audit'), false);
+test('role navigation presents administrative, audit and onboarding pages only to intended roles', () => {
+  assert.deepEqual(navigationForRole('ADMIN').map((item) => item.path), ['/dashboard', '/accounts', '/statements', '/admin/users', '/admin/onboarding', '/audit']);
+  assert.equal(navigationForRole('AUDITOR').some((item) => item.path === '/audit'), true);
+  assert.equal(navigationForRole('AUDITOR').some((item) => item.path.startsWith('/admin/')), false);
   assert.equal(navigationForRole('ACCOUNT_HOLDER').some((item) => item.path === '/audit'), false);
+  assert.equal(navigationForRole('ACCOUNT_HOLDER').some((item) => item.path === '/account-requests'), true);
 });

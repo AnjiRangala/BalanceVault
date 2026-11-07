@@ -31,6 +31,12 @@ export function AuthProvider({ children }) {
   }, []);
 
   const refreshAccounts = useCallback(() => setAccountRefreshVersion((version) => version + 1), []);
+  const updateUser = useCallback((user) => setSession((current) => {
+    if (!current) return current;
+    const next = { ...current, user: { ...current.user, ...user } };
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    return next;
+  }), []);
 
   const acceptAuthentication = useCallback((result) => {
     if (!result?.accessToken || !result?.user?.id || !result?.user?.email) {
@@ -62,6 +68,14 @@ export function AuthProvider({ children }) {
     return acceptAuthentication(result);
   }, [acceptAuthentication]);
 
+  const acceptInvitation = useCallback(async ({ token, password }) => {
+    const result = await apiRequest('/api/auth/accept-invitation', {
+      method: 'POST',
+      body: { token, password },
+    });
+    return acceptAuthentication(result);
+  }, [acceptAuthentication]);
+
   const request = useCallback((path, options = {}) => apiRequest(path, {
     ...options,
     token: session?.accessToken,
@@ -74,13 +88,15 @@ export function AuthProvider({ children }) {
     isAuthenticated: Boolean(session?.accessToken),
     login,
     register,
+    acceptInvitation,
     logout,
     request,
     accountRefreshVersion,
     refreshAccounts,
     selectedAccountId,
     setSelectedAccountId,
-  }), [accountRefreshVersion, login, logout, refreshAccounts, register, request, selectedAccountId, session]);
+    updateUser,
+  }), [accountRefreshVersion, login, logout, refreshAccounts, register, request, selectedAccountId, session, updateUser]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

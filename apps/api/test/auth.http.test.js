@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
+import bcrypt from 'bcryptjs';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { after, afterEach, beforeEach, test } from 'node:test';
@@ -16,9 +18,13 @@ import { redisClient } from '../src/config/redis.js';
 if ([...(process.env.JWT_ACCESS_SECRET ?? '')].length < 32) {
   process.env.JWT_ACCESS_SECRET = 'balancevault-http-test-secret-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 }
+if (!process.env.BALANCEVAULT_ACTOR_ASSERTION_KEY) {
+  process.env.BALANCEVAULT_ACTOR_ASSERTION_KEY = 'ab'.repeat(32);
+}
 
 const usersById = new Map();
 const usersByEmail = new Map();
+let lastInvitationTokenHash;
 const runtimeDatabaseUrl = process.env.BALANCEVAULT_TEST_RUNTIME_DATABASE_URL;
 const databaseName = runtimeDatabaseUrl ? new URL(runtimeDatabaseUrl).pathname.slice(1) : '';
 const databaseIntegration = Boolean(runtimeDatabaseUrl);
@@ -27,7 +33,26 @@ if (databaseIntegration && (!databaseName.endsWith('_test') || databaseName === 
 }
 
 const prismaClient = {
-  async $queryRaw(_strings, id, email, passwordHash) {
+  async $queryRaw(_strings, id, fullName, email, passwordHash) {
+    if (_strings.join('').includes('accept_privileged_user_invitation')) {
+      lastInvitationTokenHash = fullName;
+      const user = { id, fullName: 'Invited Auditor', email: 'invited-auditor@example.test', passwordHash: email, role: 'AUDITOR', isActive: true, tokenVersion: 0, createdAt: new Date() };
+      usersById.set(id, user);
+      usersByEmail.set(user.email, user);
+      return [{ id, fullName: user.fullName, email: user.email, role: user.role, isActive: true, createdAt: user.createdAt }];
+    }
+    if (_strings.join('').includes('change_user_password')) {
+      const [userId, expectedVersion, nextHash] = [id, fullName, email];
+      const user = usersById.get(userId);
+      if (!user || user.tokenVersion !== expectedVersion || !user.isActive) {
+        const error = new Error('password state conflict');
+        error.meta = { code: '40001' };
+        throw error;
+      }
+      user.passwordHash = nextHash;
+      user.tokenVersion += 1;
+      return [{ change_user_password: user.tokenVersion }];
+    }
     if (usersByEmail.has(email)) {
       const error = new Error('unique email violation');
       error.code = 'P2010';
@@ -37,15 +62,17 @@ const prismaClient = {
 
     const user = {
       id,
+      fullName,
       email,
       passwordHash,
       role: 'ACCOUNT_HOLDER',
       isActive: true,
+      tokenVersion: 0,
       createdAt: new Date(),
     };
     usersById.set(id, user);
     usersByEmail.set(email, user);
-    return [{ id, email, role: user.role, isActive: user.isActive, createdAt: user.createdAt }];
+    return [{ id, fullName, email, role: user.role, isActive: user.isActive, createdAt: user.createdAt, tokenVersion: 0 }];
   },
   user: {
     async findUnique({ where, select }) {
@@ -100,7 +127,7 @@ async function login(email, password) {
 
 function makeToken(userId, claims = {}, options = {}) {
   return jwt.sign(
-    { role: 'ACCOUNT_HOLDER', ...claims },
+    { role: 'ACCOUNT_HOLDER', ver: usersById.get(userId)?.tokenVersion ?? 0, ...claims },
     options.secret ?? process.env.JWT_ACCESS_SECRET,
     {
       algorithm: 'HS256',
@@ -120,6 +147,12 @@ async function protectedRequest(token, body = {}, query = '') {
       'content-type': 'application/json',
     },
     body: JSON.stringify(body),
+  });
+}
+
+async function changePassword(token, body) {
+  return fetch(`${baseUrl}/api/auth/change-password`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
 }
 
@@ -155,6 +188,7 @@ test('registration hashes the password and returns a safe account-holder respons
   assert.equal(body.expiresIn, 900);
   assert.deepEqual(body.user, {
     id: body.user.id,
+    fullName: 'Demo Holder',
     email: 'demo.holder@example.test',
     role: 'ACCOUNT_HOLDER',
   });
@@ -196,6 +230,21 @@ test('registration validates name, email and password and rejects role escalatio
   }
 });
 
+test('invitation acceptance hashes the password, sends only the token hash to SQL, and cannot choose a role', async () => {
+  const token = randomBytes(32).toString('base64url');
+  const response = await post('/api/auth/accept-invitation', { token, password: 'a-valid-invited-password' });
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  assert.equal(body.user.role, 'AUDITOR');
+  assert.equal(Object.hasOwn(body.user, 'passwordHash'), false);
+  assert.equal(lastInvitationTokenHash, createHash('sha256').update(token).digest('hex'));
+  const stored = usersById.get(body.user.id);
+  assert.notEqual(stored.passwordHash, 'a-valid-invited-password');
+  assert.equal(await bcrypt.compare('a-valid-invited-password', stored.passwordHash), true);
+  const escalation = await post('/api/auth/accept-invitation', { token, password: 'a-valid-invited-password', role: 'ADMIN' });
+  assert.equal(escalation.status, 400);
+});
+
 test('login succeeds and incorrect password and unknown user share a generic error', async () => {
   const registration = await register();
   const registered = await registration.json();
@@ -221,6 +270,22 @@ test('inactive users cannot log in', async () => {
   usersById.get(user.id).isActive = true;
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { error: 'Invalid email or password' });
+});
+
+test('password changes require the current password and invalidate existing JWTs', async () => {
+  const registration = await register();
+  const { user } = await registration.json();
+  const signedIn = await login(user.email, 'correct horse battery staple');
+  const { accessToken } = await signedIn.json();
+  const wrong = await changePassword(accessToken, { currentPassword: 'incorrect', newPassword: 'another strong password' });
+  assert.equal(wrong.status, 401);
+  const changed = await changePassword(accessToken, { currentPassword: 'correct horse battery staple', newPassword: 'another strong password' });
+  assert.equal(changed.status, 200);
+  assert.equal(usersById.get(user.id).tokenVersion, 1);
+  const oldToken = await protectedRequest(accessToken);
+  assert.equal(oldToken.status, 401);
+  const newLogin = await login(user.email, 'another strong password');
+  assert.equal(newLogin.status, 200);
 });
 
 test('middleware rejects missing, malformed, invalid-signature and expired tokens', async () => {

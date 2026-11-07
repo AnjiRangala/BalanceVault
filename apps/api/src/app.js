@@ -5,6 +5,9 @@ import { createAccountsRouter } from './routes/accounts.routes.js';
 import { createAuthRouter } from './routes/auth.routes.js';
 import { createAuditRouter } from './routes/audit.routes.js';
 import { createFinancialTransactionsRouter } from './routes/financial-transactions.routes.js';
+import { createUsersRouter } from './routes/users.routes.js';
+import { createAccountOpeningRouter } from './routes/account-opening.routes.js';
+import { createAdminRouter } from './routes/admin.routes.js';
 import { validateRuntimeConfig } from './config/runtime.js';
 import { redisClient } from './config/redis.js';
 
@@ -12,12 +15,23 @@ const runtimeConfig = validateRuntimeConfig();
 
 export function createApp({
   prismaClient = prisma,
+  authPrismaClient = prismaClient,
   rateLimitRedisClient = redisClient,
   rateLimitNamespace = 'balancevault',
 } = {}) {
   const app = express();
 
+  app.disable('x-powered-by');
   if (runtimeConfig.production) app.set('trust proxy', 1);
+  app.use((_request, response, next) => {
+    response.set({
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    });
+    next();
+  });
   app.use(cors({ origin: runtimeConfig.origins }));
   app.use(express.json({ limit: '100kb' }));
 
@@ -44,9 +58,13 @@ export function createApp({
   });
 
   app.use('/api/auth', createAuthRouter(prismaClient, {
+    authPrismaClient,
     redisClient: rateLimitRedisClient,
     keyPrefix: rateLimitNamespace,
   }));
+  app.use('/api/users', createUsersRouter(prismaClient));
+  app.use('/api/account-requests', createAccountOpeningRouter(prismaClient));
+  app.use('/api/admin', createAdminRouter(prismaClient));
   app.use('/api/audit', createAuditRouter(prismaClient));
   app.use('/api/accounts', createAccountsRouter(prismaClient));
   app.use('/api', createFinancialTransactionsRouter(prismaClient));

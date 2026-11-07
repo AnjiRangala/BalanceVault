@@ -20,6 +20,8 @@ Required on the API service:
 | --- | --- |
 | `NODE_ENV=production` | Enables production origin and TLS validation. |
 | `DATABASE_URL` | PostgreSQL URL for a dedicated login that inherits `balancevault_runtime`; never use an owner, migration, or superuser login. Production requires `sslmode=require`, `verify-ca`, or `verify-full`. |
+| `AUTH_DATABASE_URL` | Separate read-only login inheriting only `balancevault_auth_runtime`. It is used only for credential verification and can read the bcrypt hash column. |
+| `BALANCEVAULT_ACTOR_ASSERTION_KEY` | At least 32 random bytes encoded as hex. Configure the same secret in the API secret manager and the protected PostgreSQL verifier row. Never log or commit it. |
 | `JWT_ACCESS_SECRET` | At least 32 bytes; generate a random value, for example `openssl rand -base64 48`, and store it in Render's secret environment. |
 | `WEB_ORIGIN` | Comma-separated exact HTTPS browser origins allowed by CORS. |
 | `PORT` | Supplied by Render. |
@@ -30,9 +32,17 @@ Required on the API service:
 
 `MIGRATION_DATABASE_URL` belongs only in a protected deployment/migration job, never on the running API service. Run `npm run db:migrate` as a separate release step using the migration login. The migration login must own the target database, be `NOINHERIT`, and have explicit membership with `SET` capability for the relevant `NOLOGIN` function-owner roles. Provision the database roles before migration with an administrator applying `apps/api/prisma/roles.sql`.
 
+The API uses separate database identities: `DATABASE_URL` inherits only `balancevault_runtime`; `AUTH_DATABASE_URL` inherits only the read-only `balancevault_auth_runtime`. Runtime has column-scoped User reads and cannot select `passwordHash`. The authentication connection can read only the fields required to verify credentials. Provision its login separately; do not reuse the API runtime login.
+
+Invitation creation/revocation and password changes require a short-lived, single-use HMAC assertion signed by the API after JWT verification. PostgreSQL verifies it against a secret in the non-public `balancevault_auth_private` schema. After migrations, provision the same secret to PostgreSQL and the API using `npm run admin:provision-actor-key -w apps/api` in a protected environment with `MIGRATION_DATABASE_URL` and `BALANCEVAULT_ACTOR_ASSERTION_KEY` configured. The script refuses to replace an existing key; rotation requires a coordinated maintenance procedure.
+
+`BALANCEVAULT_BOOTSTRAP_DATABASE_URL` belongs only in the one-time operator bootstrap environment. Its login must be granted membership in `balancevault_bootstrap_operator` out of band. Never configure this variable on the API service or reuse the runtime login. Run `npm run admin:bootstrap -w apps/api` once after migrations. The SQL function is single-use and the runtime role cannot execute it. Later ADMIN/AUDITOR roles are provisioned through expiring, revocable invitations in the ADMIN user-management UI. Email delivery is not integrated; an administrator must deliver the one-time invitation link securely.
+
 For a same-region Render Postgres internal URL, add `sslmode=require&uselibpqcompat=true` to require encrypted transport while permitting Render's self-signed internal certificate. For an external Render URL, use Render's provided hostname and TLS URL; do not replace it with a resolved IP. Render documents that internal TLS uses self-signed certs while external connections use Render-managed certificates. The compatibility parameter also avoids node-postgres's current warning that `sslmode=require` maps to certificate verification in its default mode.
 
 The migration owner should not be a superuser. The runtime login should be a member only of `balancevault_runtime`, with no membership in the migration, posting, authentication, or account function-owner roles. API startup checks this membership boundary and fails closed if it is violated.
+
+The pending security migrations explicitly use `BEGIN`/`COMMIT`; Prisma Migrate does not implicitly wrap PostgreSQL migration SQL in a transaction. Do not remove those boundaries. They make function creation, ownership transfer, and ACL changes atomic. The migrations also change default function privileges for the migration owner so new functions do not receive `PUBLIC EXECUTE`.
 
 ## Operational limitations
 
@@ -42,3 +52,24 @@ The migration owner should not be a superuser. The runtime login should be a mem
 - Pool limits apply per process. Multiply `DATABASE_POOL_MAX` by the maximum instance count and reserve connections for migrations and operations.
 - The API logs only generic server-error events and error class names. Do not enable driver/SQL debug logging or log connection URLs in production.
 - This repository has no Render blueprint or automated role-provisioning pipeline. Configure secrets and the separate migration job in Render before deployment.
+
+## Release checklist
+
+- [ ] Pin the supported Node 24 runtime and install from the committed lockfile with `npm ci`.
+- [ ] Validate Prisma, generate the client, run API and frontend suites on disposable infrastructure, and build the production frontend.
+- [ ] Provision the database roles using a reviewed copy of `apps/api/prisma/roles.sql`; confirm the migration login owns the database and `public` schema.
+- [ ] Take an encrypted PostgreSQL custom-format backup and verify it can be listed and restored into an isolated recovery database.
+- [ ] Run `npm run db:migrate` in the protected release job with `MIGRATION_DATABASE_URL`; then verify `prisma migrate status` and critical function ownership/ACLs.
+- [ ] Provision the actor assertion key using the protected CLI after migration; configure the matching API key through the secret manager.
+- [ ] Bootstrap the first administrator with the separate operator identity. Remove the bootstrap credential from the operator environment afterward.
+- [ ] Configure runtime-only API secrets, Redis TLS/ACL, exact HTTPS `WEB_ORIGIN`, PostgreSQL TLS, pool limits, and the frontend API URL.
+- [ ] Deploy API and frontend over HTTPS. Verify `/api/health`, `/api/ready`, login, account-scoped reads, a controlled ledger operation, and audit events.
+- [ ] Confirm logs contain no tokens, hashes, connection strings, or database error details. Confirm alerts cover API, PostgreSQL, Redis, backups, and failed financial operations.
+
+Do not treat a successful application build as a completed deployment. The first live rollout still requires operator review of the target environment and a separate authorization to modify that environment.
+
+## Backup and restoration
+
+Use the provider's consistent PostgreSQL backup mechanism when available. A manual custom-format backup can be made with `pg_dump --format=custom --file=balancevault-$(date +%Y%m%dT%H%M%S).dump "$DATABASE_URL"`. Store it encrypted and separately from the production database. Record the migration version alongside the backup and verify the dump with `pg_restore --list backup.dump`.
+
+Restore to a new, isolated recovery database, not over the running production database: `pg_restore --no-owner --dbname="$RECOVERY_DATABASE_URL" backup.dump`. Provision roles and ownership, run application-level consistency checks, and verify migration state before traffic cutover. A schema migration is not automatically reversible; choose a restore point and cutover procedure through the incident plan. Preserve the affected database and logs for investigation.
