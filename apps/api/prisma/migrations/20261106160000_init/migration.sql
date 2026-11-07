@@ -286,6 +286,19 @@ ALTER TABLE public."IdempotencyRecord"
       AND "resultJournalTransactionId" IS NULL), false));
 
 CREATE SCHEMA IF NOT EXISTS balancevault_private AUTHORIZATION balancevault_posting_owner;
+
+-- PostgreSQL migration connections use balancevault_migration_owner with
+-- NOINHERIT. Switch explicitly into the designated owner while creating and
+-- securing its private trigger functions; membership alone does not confer
+-- owner privileges. The migration role is restored before public objects and
+-- grants are managed.
+GRANT USAGE ON SCHEMA public TO balancevault_posting_owner;
+GRANT USAGE ON TYPE public."AccountType", public."AccountStatus",
+  public."UserRole", public."JournalTransactionType",
+  public."JournalTransactionStatus", public."TransactionAttemptStatus"
+  TO balancevault_posting_owner;
+GRANT TRIGGER ON ALL TABLES IN SCHEMA public TO balancevault_posting_owner;
+SET ROLE balancevault_posting_owner;
 REVOKE ALL ON SCHEMA balancevault_private FROM PUBLIC;
 
 -- Helpers are SECURITY DEFINER and only callable by owned trigger functions or
@@ -733,6 +746,10 @@ FOR EACH STATEMENT EXECUTE FUNCTION balancevault_private.bv_reject_truncate();
 -- Remove PUBLIC execution, assign protected function ownership, and expose only
 -- approved entry points in the subsequent privilege migration section.
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA balancevault_private FROM PUBLIC;
+RESET ROLE;
+-- Trigger creation needed temporary privileges because the posting owner is
+-- not the owner of the Prisma tables. Revoke them as the table owner.
+REVOKE TRIGGER ON ALL TABLES IN SCHEMA public FROM balancevault_posting_owner;
 
 -- Controlled posting API. The API supplies actor_id from its verified session,
 -- never from the request body. The runtime role has EXECUTE only on this entry point.
@@ -914,20 +931,11 @@ $post$;
 -- assign ownership to balancevault_posting_owner.
 GRANT CREATE ON SCHEMA public TO balancevault_posting_owner;
 ALTER FUNCTION public.balancevault_post_transaction(uuid, public."JournalTransactionType", uuid, uuid, bigint, text, char(64)) OWNER TO balancevault_posting_owner;
-DO $ownership$
-DECLARE f record;
-BEGIN
-  FOR f IN SELECT p.oid::regprocedure AS signature
-             FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-            WHERE n.nspname='balancevault_private'
-  LOOP
-    EXECUTE format('ALTER FUNCTION %s OWNER TO balancevault_posting_owner', f.signature);
-  END LOOP;
-END;
-$ownership$;
 REVOKE CREATE ON SCHEMA public FROM balancevault_posting_owner;
+SET ROLE balancevault_posting_owner;
 REVOKE ALL ON FUNCTION public.balancevault_post_transaction(uuid, public."JournalTransactionType", uuid, uuid, bigint, text, char(64)) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.balancevault_post_transaction(uuid, public."JournalTransactionType", uuid, uuid, bigint, text, char(64)) TO balancevault_runtime;
+RESET ROLE;
 GRANT USAGE ON SCHEMA public TO balancevault_runtime;
 GRANT SELECT ON public."User", public."Account", public."AccountPermission", public."JournalTransaction", public."LedgerEntry", public."IdempotencyRecord", public."TransactionAttempt", public."AuditLog" TO balancevault_runtime;
 GRANT SELECT ON public."Account", public."AccountPermission", public."User", public."JournalTransaction", public."LedgerEntry", public."IdempotencyRecord" TO balancevault_posting_owner;
@@ -936,8 +944,6 @@ GRANT UPDATE ("role","isActive") ON public."User" TO balancevault_posting_owner;
 GRANT UPDATE ("balancePaise","updatedAt") ON public."Account" TO balancevault_posting_owner;
 GRANT UPDATE ("status") ON public."JournalTransaction" TO balancevault_posting_owner;
 GRANT UPDATE ("responseStatus","responseBody","resultJournalTransactionId") ON public."IdempotencyRecord" TO balancevault_posting_owner;
-GRANT USAGE ON SCHEMA balancevault_private TO balancevault_posting_owner;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA balancevault_private TO balancevault_posting_owner;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public."LedgerEntry", public."AuditLog" FROM balancevault_runtime;
 REVOKE UPDATE ("balancePaise") ON public."Account" FROM balancevault_runtime;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;

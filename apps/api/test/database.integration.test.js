@@ -82,6 +82,16 @@ async function balance(accountId) {
   return BigInt(rows[0].balancePaise);
 }
 
+async function customerBalanceTotal(accountIds) {
+  const { rows } = await admin.query(
+    `SELECT COALESCE(sum("balancePaise"),0)::text AS total
+       FROM public."Account"
+      WHERE id = ANY($1::uuid[]) AND type <> 'SYSTEM_CLEARING'`,
+    [accountIds],
+  );
+  return BigInt(rows[0].total);
+}
+
 async function journalPostings(journalId) {
   const { rows } = await admin.query(`
     SELECT a."accountNumber", a."systemCode", e."amountPaise"
@@ -162,6 +172,7 @@ after(async () => { if (admin) await admin.end(); });
 test('PostgreSQL 17 financial integrity integration', { skip: !integration, timeout: 120_000 }, async () => {
   const first = await fixture();
   const [a, b] = first.accountIds;
+  const customerTotalBeforeDeposit = await customerBalanceTotal([a, b]);
   const depositClearingBefore = await balance('00000000-0000-0000-0000-000000000012');
   const deposit = await post({ actorId: first.userId, type: 'DEPOSIT', destination: a, amount: 100000n, key: 'deposit-1' });
   assert.equal(deposit.response_status, 201);
@@ -169,10 +180,12 @@ test('PostgreSQL 17 financial integrity integration', { skip: !integration, time
     ['CLEARING_DEPOSIT_INR', -100000n], [null, 100000n],
   ]);
   assert.equal(await balance(a), 100000n);
+  assert.equal(await customerBalanceTotal([a, b]), customerTotalBeforeDeposit + 100000n);
   assert.equal(await balance('00000000-0000-0000-0000-000000000012'), depositClearingBefore - 100000n);
 
   const withdrawal = await post({ actorId: first.userId, type: 'WITHDRAWAL', source: a, amount: 20000n, key: 'withdrawal-1' });
   assert.equal(withdrawal.response_status, 201);
+  assert.equal(await customerBalanceTotal([a, b]), customerTotalBeforeDeposit + 80000n);
   assert.deepEqual((await journalPostings(withdrawal.response_body.journalTransactionId)).sort((x, y) => x.amount < y.amount ? -1 : 1).map((x) => [x.systemCode, x.amount]), [
     [null, -20000n], ['CLEARING_WITHDRAWAL_INR', 20000n],
   ]);
@@ -184,6 +197,7 @@ test('PostgreSQL 17 financial integrity integration', { skip: !integration, time
   ]);
   assert.equal(await balance(a), 50000n);
   assert.equal(await balance(b), 30000n);
+  assert.equal(await customerBalanceTotal([a, b]), customerTotalBeforeDeposit + 80000n);
 
   const insufficient = await post({ actorId: first.userId, type: 'WITHDRAWAL', source: a, amount: 50001n, key: 'insufficient-1' });
   assert.equal(insufficient.response_status, 422);
@@ -334,14 +348,30 @@ test('PostgreSQL 17 financial integrity integration', { skip: !integration, time
   assert.equal(await balance(opposing.accountIds[0]), 100000n);
   assert.equal(await balance(opposing.accountIds[1]), 100000n);
 
-  const rollbackFixture = await fixture({ accountCount: 1 });
+  const rollbackFixture = await fixture({ accountCount: 2 });
+  const [rollbackSource, rollbackDestination] = rollbackFixture.accountIds;
+  await post({ actorId: rollbackFixture.userId, type: 'DEPOSIT', destination: rollbackSource, amount: 5000n, key: 'rollback-fund' });
+  const rollbackSourceBefore = await balance(rollbackSource);
+  const rollbackDestinationBefore = await balance(rollbackDestination);
+  const rollbackCountsBefore = await admin.query(`SELECT
+    (SELECT count(*) FROM public."JournalTransaction") AS journals,
+    (SELECT count(*) FROM public."LedgerEntry") AS postings,
+    (SELECT count(*) FROM public."TransactionAttempt") AS attempts,
+    (SELECT count(*) FROM public."IdempotencyRecord") AS idempotency`);
   const rollbackClient = await connect(true);
   await rollbackClient.query('BEGIN');
-  await rollbackClient.query(`SELECT * FROM public.balancevault_post_transaction($1,'DEPOSIT',NULL,$2,5000,'rollback-key',$3::char(64))`, [rollbackFixture.userId, rollbackFixture.accountIds[0], hash({ key: 'rollback' })]);
+  await rollbackClient.query(`SELECT * FROM public.balancevault_post_transaction($1,'TRANSFER',$2,$3,1000,'rollback-key',$4::char(64))`, [rollbackFixture.userId, rollbackSource, rollbackDestination, hash({ key: 'rollback-transfer' })]);
   await assert.rejects(rollbackClient.query('SELECT 1/0'), (error) => error.code === '22012');
   await rollbackClient.query('ROLLBACK');
   await rollbackClient.end();
-  assert.equal(await balance(rollbackFixture.accountIds[0]), 0n);
+  assert.equal(await balance(rollbackSource), rollbackSourceBefore);
+  assert.equal(await balance(rollbackDestination), rollbackDestinationBefore);
+  const rollbackCountsAfter = await admin.query(`SELECT
+    (SELECT count(*) FROM public."JournalTransaction") AS journals,
+    (SELECT count(*) FROM public."LedgerEntry") AS postings,
+    (SELECT count(*) FROM public."TransactionAttempt") AS attempts,
+    (SELECT count(*) FROM public."IdempotencyRecord") AS idempotency`);
+  assert.deepEqual(rollbackCountsAfter.rows[0], rollbackCountsBefore.rows[0]);
   const rollbackIdem = await admin.query('SELECT count(*) FROM public."IdempotencyRecord" WHERE "userId"=$1 AND "idempotencyKey"=\'rollback-key\'', [rollbackFixture.userId]);
   assert.equal(Number(rollbackIdem.rows[0].count), 0);
 
