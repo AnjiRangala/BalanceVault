@@ -489,3 +489,67 @@ a { color: inherit; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.ledger-page { min-width: 0; }
+.statement-account-select { display: grid; max-width: 460px; gap: 8px; margin: 20px 0; color: #65766c; font-size: 12px; font-weight: 650; }
+.statement-account-select select { min-height: 44px; padding: 0 13px; border: 1px solid #dce4dc; border-radius: 9px; background: #fff; color: #20372c; font: inherit; }
+.statement-account-summary { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 17px 0 12px; padding: 17px 19px; border: 1px solid #e5ebe4; border-radius: 12px; background: #fff; color: #6d7c73; font-size: 12px; }
+.statement-account-summary > div { display: grid; gap: 4px; }
+.statement-account-summary strong { color: #173c2d; font-size: 17px; }
+.statement-list { border-top: 1px solid #e5ebe4; }
+.statement-event { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 16px 4px; border-bottom: 1px solid #e8ede7; }
+.statement-event-mark { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 11px; background: #edf4ed; color: #38724c; font-size: 18px; font-weight: 700; }
+.statement-event-mark.event-refused { background: #fcf1e8; color: #a45f29; }
+.statement-event-main { min-width: 0; }
+.statement-event-title { display: flex; align-items: center; gap: 9px; color: #243c30; font-size: 13px; }
+.event-status { display: inline-flex; align-items: center; padding: 4px 7px; border-radius: 99px; font-size: 9px; font-weight: 750; letter-spacing: .04em; }
+.event-status-posted { background: #eaf3eb; color: #39724a; }
+.event-status-refused { background: #fbefe6; color: #a75c2e; }
+.statement-event-meta, .statement-event-values span { display: block; margin-top: 5px; color: #89968d; font-size: 10px; overflow-wrap: anywhere; }
+.statement-event-extra { display: flex; flex-wrap: wrap; gap: 7px 15px; margin-top: 8px; color: #6c7b72; font-size: 10px; }
+.statement-event-values { max-width: 220px; text-align: right; }
+.statement-event-values > strong { color: #264532; font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.statement-event-values > strong.amount-debit { color: #9b5540; }
+.statement-event-values > strong.amount-credit { color: #39724a; }
+.statement-event-values span { line-height: 1.45; }
+.ledger-load-more, .audit-pagination { display: flex; align-items: center; justify-content: center; gap: 13px; padding: 20px 0 4px; color: #75847a; font-size: 11px; }
+.ledger-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 16px 0; padding: 14px 16px; border: 1px solid #f0dcd2; border-radius: 10px; background: #fff8f4; color: #854b35; font-size: 12px; }
+.ledger-error .button, .audit-pagination .button { min-height: 35px; }
+.dashboard-statement-list { margin-top: 6px; }
+.statement-event-compact { grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px; padding: 12px 2px; }
+.statement-event-compact .statement-event-mark { width: 29px; height: 29px; }
+.statement-event-compact .statement-event-title { font-size: 11px; }
+.statement-event-compact .statement-event-values { max-width: 165px; }
+.statement-event-compact .statement-event-values > strong { font-size: 11px; }
+.statement-order-note { margin-top: 12px; color: #89968d; font-size: 10px; }
+.transfer-detail-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 18px 0 26px; }
+.transfer-detail-summary > div { display: grid; align-content: start; gap: 8px; min-width: 0; padding: 15px; border: 1px solid #e5ebe4; border-radius: 10px; background: #fff; }
+.transfer-detail-summary > div > span { color: #87948b; font-size: 10px; }
+.transfer-detail-summary > div > strong { color: #263f31; font-size: 12px; overflow-wrap: anywhere; }
+.transfer-detail-summary .break-id { font-size: 10px; }
+.ledger-subheading { margin: 0 0 10px; color: #294536; font-size: 16px; }
+.transfer-entry-list { border-top: 1px solid #e5ebe4; }
+.transfer-entry-list article { display: flex; justify-content: space-between; gap: 15px; padding: 14px 3px; border-bottom: 1px solid #e8ede7; color: #2c4837; font-size: 12px; }
+.transfer-entry-list article > div { display: grid; gap: 5px; }
+.transfer-entry-list article span { color: #87948b; font-size: 10px; }
+.audit-row-detailed { min-height: 85px; align-items: flex-start; padding: 15px 0; }
+.audit-row-detailed .audit-icon { flex: 0 0 auto; }
+.audit-row-detailed .audit-main { min-width: 0; flex: 1; }
+.audit-row-detailed .audit-main > strong { display: block; }
+.audit-row-detailed .audit-main span, .audit-row-detailed .audit-main small { display: block; margin-top: 5px; color: #839087; font-size: 10px; overflow-wrap: anywhere; }
+.audit-row-detailed time { flex: 0 0 auto; color: #89968d; font-size: 10px; }
+.audit-metadata { max-width: 100%; max-height: 220px; overflow: auto; margin: 9px 0 0; padding: 10px; border-radius: 8px; background: #f5f7f4; color: #607166; font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (max-width: 600px) {
+  .statement-event { grid-template-columns: 31px minmax(0, 1fr); gap: 9px; padding: 13px 0; }
+  .statement-event-mark { width: 29px; height: 29px; }
+  .statement-event-values { grid-column: 2; display: flex; max-width: none; align-items: baseline; justify-content: space-between; gap: 8px; text-align: left; }
+  .statement-event-values span { margin-top: 0; text-align: right; }
+  .statement-event-extra { gap: 6px 10px; }
+  .ledger-error { align-items: flex-start; flex-direction: column; }
+  .ledger-error .button { width: 100%; }
+  .audit-row-detailed { flex-wrap: wrap; }
+  .audit-row-detailed time { margin-left: 39px; }
+  .statement-event-compact { grid-template-columns: 27px minmax(0, 1fr); }
+  .statement-event-compact .statement-event-values { grid-column: 2; }
+}

@@ -3,6 +3,8 @@ import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
 import { ApiError, getBackendStatus } from './lib/api.js';
 import { createCustomerAccount, fetchAccount, fetchAccountBalance, fetchAccounts, formatAccountDate, formatPaiseAsINR } from './lib/accounts.js';
 import FinancialTransactionPage from './components/FinancialTransactionPage.jsx';
+import { AuditPage, StatementEvent, StatementPage, TransferDetailsPage } from './components/LedgerPages.jsx';
+import { fetchAccountStatement, navigationForRole } from './lib/ledger.js';
 
 function navigate(path, replace = false) {
   if (window.location.pathname !== path) {
@@ -171,11 +173,7 @@ function AppShell({ pathname }) {
 
   useEffect(() => setMobileMenuOpen(false), [pathname]);
 
-  const navItems = [
-    { path: '/dashboard', label: 'Overview', icon: 'grid' },
-    { path: '/accounts', label: 'Accounts', icon: 'cards' },
-    ...(isAdmin ? [{ path: '/audit', label: 'Audit log', icon: 'shield' }] : []),
-  ];
+  const navItems = navigationForRole(user?.role);
 
   function signOut() {
     logout();
@@ -196,14 +194,16 @@ function AppShell({ pathname }) {
 
       <div className="main-column">
         <header className="topbar">
-          <div className="topbar-leading"><button className="mobile-menu-button" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation"><span /><span /><span /></button><div className="breadcrumb"><span>Workspace</span><b>/</b><strong>{pathname.startsWith('/accounts/') ? 'Account details' : pathname.startsWith('/transactions/') ? pathname.split('/')[2]?.[0]?.toUpperCase() + pathname.split('/')[2]?.slice(1) : pathname === '/accounts' ? 'Accounts' : pathname === '/audit' ? 'Audit log' : 'Overview'}</strong></div></div>
+          <div className="topbar-leading"><button className="mobile-menu-button" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation"><span /><span /><span /></button><div className="breadcrumb"><span>Workspace</span><b>/</b><strong>{pathname.startsWith('/accounts/') ? 'Account details' : pathname.startsWith('/transactions/') ? pathname.split('/')[2]?.[0]?.toUpperCase() + pathname.split('/')[2]?.slice(1) : pathname.startsWith('/transfers/') ? 'Transfer details' : pathname === '/accounts' ? 'Accounts' : pathname === '/statements' ? 'Statements' : pathname === '/audit' ? 'Audit log' : 'Overview'}</strong></div></div>
           <div className="topbar-actions"><BackendBadge /><span className="topbar-divider" /><div className="profile-summary"><span className="avatar">{user.email[0]?.toUpperCase()}</span><span className="profile-email">{user.email}</span></div><button className="icon-button signout-button" onClick={signOut} title="Sign out" aria-label="Sign out"><Icon name="logout" size={18} /></button></div>
         </header>
         <main className="page-content">
           {pathname === '/accounts' ? <AccountsPage request={request} isAdmin={isAdmin} accountRefreshVersion={accountRefreshVersion} refreshAccounts={refreshAccounts} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
+            : pathname === '/statements' ? <StatementPage request={request} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
             : pathname.startsWith('/accounts/') ? <AccountDetailsPage accountId={pathname.split('/')[2]} request={request} selectedAccountId={selectedAccountId} setSelectedAccountId={setSelectedAccountId} />
               : pathname.startsWith('/transactions/') ? <FinancialTransactionPage type={pathname.split('/')[2]} onNavigate={navigate} />
-              : pathname === '/audit' && isAdmin ? <AuditPage request={request} /> : <DashboardPage request={request} user={user} accountRefreshVersion={accountRefreshVersion} />}
+              : pathname.startsWith('/transfers/') ? <TransferDetailsPage request={request} transferId={pathname.split('/')[2]} onNavigate={navigate} />
+                : pathname === '/audit' && isAdmin ? <AuditPage request={request} /> : <DashboardPage request={request} user={user} accountRefreshVersion={accountRefreshVersion} />}
         </main>
         <footer className="app-footer"><span>BalanceVault <i>·</i> Financial clarity, by design.</span><span className="footer-secure"><Icon name="lock" size={13} /> Secure session</span></footer>
       </div>
@@ -259,12 +259,31 @@ function DashboardPage({ request, user, accountRefreshVersion }) {
         </section>
       </div>
 
-      <section className="section-block activity-block">
-        <div className="section-heading"><div><span className="section-kicker">LEDGER</span><h2>Recent activity</h2></div><div className="activity-filter"><span className="filter-indicator" />All activity <span className="filter-caret">⌄</span></div></div>
-        <EmptyState title="Your activity will show here" detail="There are no transactions to display yet. When activity is available, it will appear here from your account ledger." icon="activity" />
-      </section>
+      <DashboardActivity request={request} accounts={accounts} />
     </>
   );
+}
+
+function DashboardActivity({ request, accounts }) {
+  const [statement, setStatement] = useState(null);
+  const [error, setError] = useState('');
+  const firstAccount = accounts?.[0];
+  useEffect(() => {
+    if (!firstAccount) { setStatement(null); return undefined; }
+    const controller = new AbortController(); setError(''); setStatement(null);
+    fetchAccountStatement(request, firstAccount.id, { limit: 5, signal: controller.signal })
+      .then(setStatement).catch((err) => { if (err.name !== 'AbortError') setError(err.status === 403 ? 'You do not have permission to view this account activity.' : err.message || 'Activity could not be loaded.'); });
+    return () => controller.abort();
+  }, [firstAccount?.id, request]);
+  return <section className="section-block activity-block">
+    <div className="section-heading"><div><span className="section-kicker">LEDGER</span><h2>Transaction activity</h2></div>{firstAccount && <button className="text-link" onClick={() => navigate('/statements')}>Full statements <Icon name="arrow" size={16} /></button>}</div>
+    {!accounts && <div className="loading-row"><span className="spinner spinner-dark" />Loading account activity</div>}
+    {accounts?.length === 0 && <EmptyState title="No accounts available" detail="Account activity will appear when you have access to an account." icon="activity" />}
+    {firstAccount && !statement && !error && <div className="loading-row"><span className="spinner spinner-dark" />Loading ledger activity</div>}
+    {error && <div className="ledger-error" role="alert"><span>{error}</span><button className="button button-outline" onClick={() => navigate('/statements')}>Open statements</button></div>}
+    {statement?.events.length === 0 && <EmptyState title="No transaction activity yet" detail="Posted entries and refused attempts will appear in the account statement." icon="activity" />}
+    {statement?.events.length > 0 && <><div className="statement-list dashboard-statement-list">{statement.events.map((event) => <StatementEvent key={`${event.status}:${event.id}`} event={event} currencyCode={statement.account.currencyCode} compact />)}</div><p className="statement-order-note">Entries shown in the order supplied by the account ledger.</p></>}
+  </section>;
 }
 
 function AccountsPage({ request, isAdmin, accountRefreshVersion, refreshAccounts, selectedAccountId, setSelectedAccountId }) {
@@ -374,7 +393,7 @@ function AccountDetailsPage({ accountId, request, selectedAccountId, setSelected
             <article className="detail-balance-card"><span className="detail-card-kicker">CURRENT BALANCE</span><strong>{balance ? formatPaiseAsINR(balance.balancePaise, balance.currencyCode) : 'Balance unavailable'}</strong><small>Balance supplied by the BalanceVault account API.</small><div className="detail-balance-watermark" aria-hidden="true">BV</div></article>
             <article className="detail-info-card"><div className="detail-info-heading"><span className="account-symbol account-symbol-large"><Icon name={account.type === 'BUSINESS' ? 'building' : 'cards'} size={20} /></span><div><span className="section-kicker">ACCOUNT INFORMATION</span><h2>Account details</h2></div></div><dl className="detail-list"><div><dt>Account number</dt><dd>{account.accountNumber}</dd></div><div><dt>Account type</dt><dd>{account.type === 'BUSINESS' ? 'Business' : 'Personal'}</dd></div><div><dt>Status</dt><dd><span className={`status-pill status-${account.status.toLowerCase()}`}><i />{account.status.toLowerCase()}</span></dd></div><div><dt>Currency</dt><dd>{account.currencyCode}</dd></div><div><dt>Created</dt><dd>{formatAccountDate(account.createdAt)}</dd></div></dl></article>
           </div>
-          <div className="detail-selection-row"><div><strong>Future transaction forms</strong><p>Use this account as the starting selection for upcoming money movement forms.</p></div><button className={`button ${selectedAccountId === account.id ? 'button-selected' : 'button-outline'}`} onClick={() => setSelectedAccountId(account.id)}>{selectedAccountId === account.id ? 'Selected for future actions' : 'Select this account'}</button></div>
+          <div className="detail-selection-row"><div><strong>Account statement</strong><p>Review posted entries and refused attempts recorded for this account.</p></div><button className="button button-outline" onClick={() => { setSelectedAccountId(account.id); navigate('/statements'); }}>View statements</button><button className={`button ${selectedAccountId === account.id ? 'button-selected' : 'button-outline'}`} onClick={() => setSelectedAccountId(account.id)}>{selectedAccountId === account.id ? 'Selected for future actions' : 'Select this account'}</button></div>
         </>}
   </section>;
 }
@@ -428,22 +447,6 @@ function ErrorPanel({ message, onRetry }) {
   return <div className="account-error-panel" role="alert"><span className="error-mark">!</span><div><strong>We couldn’t load the account information</strong><p>{message}</p></div><button className="button button-outline" onClick={onRetry}>Retry</button></div>;
 }
 
-function AuditPage({ request }) {
-  const [events, setEvents] = useState(null);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    const controller = new AbortController();
-    request('/api/audit?page=1&perPage=25', { signal: controller.signal })
-      .then((result) => setEvents(result.events ?? []))
-      .catch((requestError) => { if (requestError.name !== 'AbortError') setError(requestError.message); });
-    return () => controller.abort();
-  }, [request]);
-  return <section className="section-block full-page-block"><div className="page-title-row"><div><span className="section-kicker">ADMINISTRATION</span><h1>Audit log</h1><p>Recent recorded actions across BalanceVault.</p></div></div>
-    {error && <div className="inline-error" role="alert">{error}</div>}
-    {events === null && !error ? <div className="loading-row"><span className="spinner spinner-dark" />Loading audit events</div> : events?.length === 0 ? <EmptyState title="No audit events yet" detail="Recorded actions will appear here." /> : <div className="audit-list">{events?.map((event) => <article className="audit-row" key={event.id}><span className="audit-icon"><Icon name="activity" size={18} /></span><div className="audit-main"><strong>{event.action.replaceAll('_', ' ').toLowerCase()}</strong><span>{event.actor.email} · {event.entityType}</span></div><time dateTime={event.createdAt}>{formatDate(event.createdAt)}</time></article>)}</div>}
-  </section>;
-}
-
 function AccountRow({ account }) {
   return <article className="account-row"><span className="account-symbol"><Icon name={account.type === 'BUSINESS' ? 'building' : 'cards'} size={18} /></span><span className="account-row-main"><strong>{account.accountNumber}</strong><small>{account.type === 'BUSINESS' ? 'Business account' : 'Personal account'}</small></span><span className={`status-pill status-${account.status.toLowerCase()}`}><i />{account.status.toLowerCase()}</span><span className="account-currency">{account.currencyCode}</span></article>;
 }
@@ -477,7 +480,8 @@ function AppRouter() {
   const publicRoute = pathname === '/login' || pathname === '/register';
   const accountDetailRoute = /^\/accounts\/[^/]+$/.test(pathname);
   const transactionRoute = /^\/transactions\/(deposit|withdrawal|transfer)$/.test(pathname);
-  const knownRoute = ['/login', '/register', '/dashboard', '/accounts', '/audit'].includes(pathname) || accountDetailRoute || transactionRoute;
+  const transferDetailRoute = /^\/transfers\/[^/]+$/.test(pathname);
+  const knownRoute = ['/login', '/register', '/dashboard', '/accounts', '/statements', '/audit'].includes(pathname) || accountDetailRoute || transactionRoute || transferDetailRoute;
 
   useEffect(() => {
     if (!isAuthenticated && !publicRoute) navigate('/login', true);

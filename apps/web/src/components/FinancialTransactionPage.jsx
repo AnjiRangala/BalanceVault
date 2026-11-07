@@ -307,6 +307,7 @@ function TransactionResult({ outcome, attempt, submitting, onRetry, onEdit, onNe
       {uncertain && <button className="button button-primary" onClick={onRetry} disabled={submitting}>{submitting ? <><span className="spinner" />Checking…</> : 'Retry same request'}</button>}
       {outcome.kind === 'error' && <button className="button button-outline" onClick={onEdit}>Edit details</button>}
       {(posted || refused || conflict || outcome.kind === 'error') && <button className="button button-outline" onClick={onNew}>Start another transaction</button>}
+      {posted && payload?.type === 'TRANSFER' && reference && <button className="button button-primary" onClick={() => onNavigate(`/transfers/${encodeURIComponent(reference)}`)}>View transfer details</button>}
       {(posted || refused) && <span className="result-confirmed-note">{posted ? 'Confirmed by the backend.' : 'Refusal recorded by the backend.'}</span>}
     </div>
   </section>;
