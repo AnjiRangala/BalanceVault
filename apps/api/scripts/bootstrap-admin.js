@@ -43,6 +43,14 @@ function askSecret(prompt) {
   });
 }
 
+function safeErrorMessage(error) {
+  const message = typeof error?.message === 'string' ? error.message.trim() : '';
+  if (/^permission denied for (?:database|schema|table|sequence|function|role) [A-Za-z0-9_."-]{1,120}$/i.test(message)) {
+    return message;
+  }
+  return 'Database operation failed';
+}
+
 const databaseUrl = process.env.BALANCEVAULT_BOOTSTRAP_DATABASE_URL;
 if (!databaseUrl) {
   console.error('Set BALANCEVAULT_BOOTSTRAP_DATABASE_URL to the operator-only database connection.');
@@ -50,8 +58,10 @@ if (!databaseUrl) {
 }
 
 const client = new Client({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 });
+let stage = 'connect';
 try {
   await client.connect();
+  stage = 'database_confirmation';
   const { rows: [db] } = await client.query('SELECT current_database() AS name');
   const expected = new URL(databaseUrl).pathname.slice(1);
   console.log(`Connected database: ${db.name}`);
@@ -69,14 +79,17 @@ try {
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
+  stage = 'set_role';
   await client.query('SET ROLE balancevault_bootstrap_operator');
+  stage = 'bootstrap_function';
   const { rows: [user] } = await client.query(
     'SELECT * FROM public.bootstrap_first_admin($1::uuid, $2::text, $3::text, $4::text)',
     [randomUUID(), fullName, email, passwordHash],
   );
   console.log(`First administrator created: ${user.email} (${user.id}). Sign in through the normal login page.`);
 } catch (error) {
-  console.error(`Bootstrap failed: ${error?.code ? `database error ${error.code}` : 'check the supplied input and operator permissions'}.`);
+  const code = typeof error?.code === 'string' ? error.code : 'unknown';
+  console.error(`Bootstrap failed at ${stage}; code ${code}: ${safeErrorMessage(error)}.`);
   process.exitCode = 1;
 } finally {
   await client.end().catch(() => {});
