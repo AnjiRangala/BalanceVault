@@ -13,6 +13,21 @@ psql "host=<NEON_DIRECT_HOST> dbname=<DEMO_DATABASE> user=<NEON_PROJECT_OWNER> s
   -v ON_ERROR_STOP=1 -f apps/api/prisma/roles.sql
 ```
 
+Neon does not expose a PostgreSQL role with the actual `SUPERUSER` attribute. The role declarations in `roles.sql` set restrictive `NOSUPERUSER`/`NOCREATEDB`/`NOCREATEROLE`/`NOREPLICATION`/`NOBYPASSRLS` attributes when creating the roles. The later `ALTER ROLE` statements repeat the non-superuser restrictions and normalize `LOGIN`/`INHERIT`; they omit only `NOSUPERUSER`, which Neon rejects because it is an attempt to change the `SUPERUSER` attribute. Run this as the Neon project owner, whose delegated role-management privileges are needed for the remaining role-attribute changes. If you previously ran this file and it stopped at the first `ALTER ROLE`, rerun the whole file after updating; the role creation block uses `IF NOT EXISTS`, and the grants are repeatable. Then verify all eight roles' attributes before proceeding, especially if any role existed before this script was run:
+
+```sql
+SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole,
+       rolreplication, rolbypassrls, rolinherit
+FROM pg_catalog.pg_roles
+WHERE rolname IN (
+  'balancevault_migration_owner', 'balancevault_posting_owner',
+  'balancevault_runtime', 'balancevault_auth_owner',
+  'balancevault_account_owner', 'balancevault_provisioning_owner',
+  'balancevault_bootstrap_operator', 'balancevault_auth_runtime'
+)
+ORDER BY rolname;
+```
+
 Reconnect interactively as the Neon project owner. `psql` prompts for its password; the session is needed for the `\password` prompts below:
 
 ```sh
@@ -61,7 +76,7 @@ ALTER DATABASE <DEMO_DATABASE> OWNER TO balancevault_migration_owner;
 ALTER SCHEMA public OWNER TO balancevault_migration_owner;
 ```
 
-The API logins must be SQL-created roles with only their respective `balancevault_runtime` or `balancevault_auth_runtime` membership. Do not create them through Neon Console/API role creation, which grants Neon administrative membership. Verify Neon accepts the role grants and database/schema ownership transfer before proceeding. If Neon rejects these operations or the API's startup privilege checks reject the resulting runtime identities, stop: do not substitute the Neon owner or an administrator login for an app login. This repository has not been integration-tested against Neon.
+The API logins must be SQL-created roles with only their respective `balancevault_runtime` or `balancevault_auth_runtime` membership. Do not create them through Neon Console/API role creation, which grants Neon administrative membership. The Neon error reported so far occurred before `roles.sql` reached its membership grants; therefore role grants, database/schema ownership transfer, and migration-time function ownership have not yet been verified on Neon. Test those steps on this fresh demo database before proceeding. The migrations rely on `balancevault_migration_owner` owning the database and `public` schema, having `SET ROLE` membership in the restricted function-owner roles, and assigning SECURITY DEFINER functions to those owners. If Neon rejects any operation or the API's startup privilege checks reject the runtime identities, stop: do not substitute the Neon owner or an administrator login for an app login. No application migration has been changed for Neon compatibility.
 
 Run migrations from a trusted terminal using the dedicated migration-owner direct connection, not from the Render app or a pooled endpoint. At the shell prompt, enter the full URI into the hidden input:
 
