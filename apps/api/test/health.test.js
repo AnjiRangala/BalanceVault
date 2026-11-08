@@ -33,6 +33,9 @@ test('GET /api/health reports application health', async () => {
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(response.headers.get('x-frame-options'), 'DENY');
   assert.equal(response.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+  assert.equal(response.headers.get('content-security-policy'), "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+  assert.match(response.headers.get('x-request-id'), /^[0-9a-f-]{36}$/i);
+  assert.equal(response.headers.get('strict-transport-security'), null, 'local HTTP must not receive HSTS');
   assert.equal(response.headers.get('x-powered-by'), null);
   assert.deepEqual(await response.json(), {
     application: 'BalanceVault',
@@ -44,6 +47,16 @@ test('unknown API routes return a JSON 404', async () => {
   const response = await fetch(`${baseUrl}/api/does-not-exist`);
   assert.equal(response.status, 404);
   assert.deepEqual(await response.json(), { error: 'API route not found' });
+});
+
+test('JSON request bodies are bounded before reaching route handlers', async () => {
+  const response = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'unused@example.test', padding: 'x'.repeat(70_000) }),
+  });
+  assert.equal(response.status, 413);
+  assert.match(response.headers.get('x-request-id'), /^[0-9a-f-]{36}$/i);
 });
 
 async function requestReady(prismaClient) {

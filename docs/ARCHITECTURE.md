@@ -28,3 +28,7 @@ Privileged invitations and password changes use short-lived HMAC assertions boun
 ## Local configuration and operations
 
 Copy `.env.example` to `.env` and provide local values for the API and separate database identities. No credentials or token secrets belong in the repository. `/api/health` is a liveness endpoint; `/api/ready` performs a bounded database readiness check. See `docs/DEPLOYMENT.md` for production setup, migration order, and recovery guidance.
+
+Ledger reconciliation is an operations-only read path. The CLI uses a dedicated runtime login, verifies that the login is not a superuser or migration/function owner, and runs a repeatable-read, read-only snapshot comparing `Account.balancePaise` with the signed sum of that account's `LedgerEntry.amountPaise`. It reports differences without attempting repairs. Operational scheduling and alerting must be supplied by the deployment environment.
+
+The current browser session still uses a short-lived JWT bearer token in `sessionStorage`. The API reloads active status, role, and token version for every protected request, but JavaScript can read the browser token. A production server-managed cookie session with CSRF defenses has not been implemented; this remains an explicit launch blocker, not a claimed mitigation.

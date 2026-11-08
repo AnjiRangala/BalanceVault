@@ -1,5 +1,6 @@
 import cors from 'cors';
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 import { prisma } from './db/prisma.js';
 import { createAccountsRouter } from './routes/accounts.routes.js';
 import { createAuthRouter } from './routes/auth.routes.js';
@@ -23,17 +24,29 @@ export function createApp({
 
   app.disable('x-powered-by');
   if (runtimeConfig.production) app.set('trust proxy', 1);
-  app.use((_request, response, next) => {
-    response.set({
+  app.use((request, response, next) => {
+    const headers = {
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
       'Referrer-Policy': 'strict-origin-when-cross-origin',
       'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-    });
+      'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      'X-Request-Id': randomUUID(),
+    };
+    if (runtimeConfig.production && request.secure) {
+      headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
+    }
+    request.id = headers['X-Request-Id'];
+    response.set(headers);
     next();
   });
-  app.use(cors({ origin: runtimeConfig.origins }));
-  app.use(express.json({ limit: '100kb' }));
+  app.use(cors({
+    origin: runtimeConfig.origins,
+    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key'],
+    maxAge: 600,
+  }));
+  app.use(express.json({ limit: '64kb' }));
 
   app.get('/api/health', (_request, response) => {
     response.json({ application: 'BalanceVault', status: 'healthy' });
@@ -79,7 +92,10 @@ export function createApp({
       : 500;
 
     if (status >= 500) {
-      console.error('Unhandled request error', { name: error?.name ?? 'Error' });
+      console.error('Unhandled request error', {
+        requestId: _request.id,
+        name: error?.name ?? 'Error',
+      });
     }
 
     response.status(status).json({

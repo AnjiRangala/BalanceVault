@@ -34,16 +34,21 @@ Threat actors include unauthenticated internet clients, compromised customer or 
 | Forged or replayed privileged operation | HMAC binds actor, action, time, nonce, and arguments; PostgreSQL checks expiry and consumes the nonce atomically; runtime cannot call legacy UUID-only wrappers. |
 | Database privilege escalation or password-hash disclosure | Separate migration/function/runtime/auth/bootstrap identities; PUBLIC execution revoked for privileged functions; pinned SECURITY DEFINER search paths; auth hash access is column scoped. |
 | SQL injection | Prisma parameterized calls and queries; dynamic SQL is avoided for request values; Zod validation rejects unexpected fields on sensitive endpoints. |
-| Browser script injection or clickjacking | React's normal text escaping, JSON APIs, `X-Content-Type-Options: nosniff`, and `X-Frame-Options: DENY`. No user-supplied HTML rendering is part of the current workflow. |
+| Browser script injection or clickjacking | React's normal text escaping, JSON APIs, API-side `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, and frame-denial headers. The static host still must enforce the documented frontend CSP and HTTPS headers. No user-supplied HTML rendering is part of the current workflow. |
 | Cross-origin abuse | CORS allows only configured exact origins. The API uses bearer headers rather than ambient cookies, so classic cookie-based CSRF does not apply. |
 | Sensitive data exposure in logs or responses | Generic server errors; no password hashes or token hashes in API responses; invitation token is returned once with `Cache-Control: no-store`; operational URLs/secrets are not logged. |
 | Service denial or dependency failure | Request size limit, bounded database readiness checks, rate limits, database pool bounds, and fail-closed behavior when Redis is unavailable. |
+| Ledger/balance drift | Posting transactions reconcile each affected balance against the signed ledger total; the read-only reconciliation CLI scans all accounts in one snapshot and reports discrepancies without repairing them. Scheduling and alerting are deployment responsibilities. |
 
 ## Residual risks
 
 - A compromised API process can act with runtime privileges and can sign actor assertions if it can read the assertion key. Keep API secrets in a managed secret store, restrict host access, rotate through a coordinated procedure, and monitor privileged audit events.
 - A database superuser or migration credential can alter schema, roles, data, and audit evidence. Restrict access, require reviewed changes, and retain encrypted backups outside the database account.
 - Browser bearer tokens are exposed to successful same-origin script injection. See `docs/FRONTEND.md` for the current storage strategy; deploy a restrictive frontend content policy and prevent untrusted script execution.
+- A production server-managed HttpOnly/Secure/SameSite session with CSRF protection has not been implemented. Do not treat API bearer-token checks or frontend route hiding as a replacement for that session architecture.
+- RPO, RTO, backup retention, and reconciliation frequency are not set; the service owner must define them and rehearse recovery before launch.
+- Three already-applied-to-disposable-database migration files lack explicit transaction blocks; see `docs/DEPLOYMENT.md` for the migration-recovery constraint. Do not rewrite their contents after application.
 - Authentication depends on Redis availability. A Redis outage causes login and registration to fail closed.
 - Invitation email delivery, anomaly alerts, automated reconciliation scheduling, and production restore exercises are operational integrations that are not implemented in this repository.
+- The local dependency audit reports a moderate `minimatch` denial-of-service advisory through development-only `nodemon`; `npm audit fix` cannot resolve it under the current upstream dependency range. The CI audit gate fails on high/critical findings, so this moderate advisory needs follow-up when upstream publishes a compatible fix.
 - No independent security audit or production penetration test is represented by the repository test results.

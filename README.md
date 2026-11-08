@@ -45,7 +45,7 @@ The initial migration explicitly switches to `balancevault_posting_owner` while 
 
 ## Deployment
 
-For Render, deploy `apps/api` as a Node web service from the repository root. Use `npm ci && npm run build` as the build command and `npm start` as the start command. Configure the API's required variables from a secret manager; see [Deployment configuration](docs/DEPLOYMENT.md). Deploy the web frontend separately as a Vite static site and set `VITE_API_BASE_URL` to the public API origin.
+For the fastest free hackathon demo, follow the [Vercel + Render + Neon + Upstash deployment guide](docs/DEMO_DEPLOYMENT.md). The API starts with `npm start`; Render's blueprint generates the Prisma client during its build. Vercel builds only the frontend with `npm run build -w apps/web`. For broader deployment and recovery guidance, see [Deployment configuration](docs/DEPLOYMENT.md).
 
 Useful commands:
 
@@ -68,6 +68,10 @@ See [frontend authentication and session storage](docs/FRONTEND.md) for the brow
 - Read-only auditor views restricted to assigned customer accounts.
 
 Financial posting uses a PostgreSQL-controlled double-entry ledger. Amounts are integer paise, ledger entries are append-only, account locks prevent concurrent overdrafts, and idempotency keys make retries safe. The frontend does not update balances or decide authorization.
+
+### Read-only ledger reconciliation
+
+Run `npm run ledger:reconcile -w apps/api` with `RECONCILIATION_DATABASE_URL` set to a least-privilege login that inherits only `balancevault_runtime`. The command checks that every stored account balance equals the sum of its signed ledger entries inside one repeatable-read, read-only transaction. It prints mismatches and exits with status 2 if any are found; it never repairs balances. Run it after data migrations/imports and on an operator-approved schedule, and investigate discrepancies before taking corrective action.
 
 ## Architecture and security
 

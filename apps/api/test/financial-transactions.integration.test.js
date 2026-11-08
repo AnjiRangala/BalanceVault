@@ -7,6 +7,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/index.js';
 import { createApp } from '../src/app.js';
 import { JWT_AUDIENCE, JWT_ISSUER } from '../src/config/auth.js';
+import { canonicalRequestHash } from '../src/services/financial-transaction.service.js';
 
 if ([...(process.env.JWT_ACCESS_SECRET ?? '')].length < 32) {
   process.env.JWT_ACCESS_SECRET = 'balancevault-financial-db-test-secret-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -64,9 +65,87 @@ async function createTestUser(role) {
   return id;
 }
 
+async function createFinancialFixture(accountCount = 2) {
+  const userId = randomUUID();
+  const accountIds = Array.from({ length: accountCount }, () => randomUUID());
+  await admin.query('BEGIN');
+  try {
+    await admin.query(
+      `INSERT INTO public."User" (id,email,"passwordHash",role,"isActive","updatedAt")
+       VALUES ($1,$2,'test-hash','ACCOUNT_HOLDER',true,clock_timestamp())`,
+      [userId, `${userId}@example.test`],
+    );
+    for (const [index, accountId] of accountIds.entries()) {
+      await admin.query(
+        `INSERT INTO public."Account" (id,"accountNumber",type,status,"balancePaise","currencyCode","updatedAt")
+         VALUES ($1,$2,'PERSONAL','ACTIVE',0,'INR',clock_timestamp())`,
+        [accountId, `BV-RACE-${userId.slice(0, 8)}-${index}`],
+      );
+      await admin.query(
+        `INSERT INTO public."AccountPermission"
+          (id,"userId","accountId","canView","canDeposit","canWithdraw","canTransfer","updatedAt")
+         VALUES ($1,$2,$3,true,true,true,true,clock_timestamp())`,
+        [randomUUID(), userId, accountId],
+      );
+    }
+    await admin.query('COMMIT');
+  } catch (error) {
+    await admin.query('ROLLBACK');
+    throw error;
+  }
+  return { userId, accountIds };
+}
+
+async function postDatabaseTransaction({ actorId, type, sourceAccountId = null, destinationAccountId = null, amountPaise, idempotencyKey }, client = null) {
+  const ownedClient = client ?? new Client({ connectionString: runtimeDatabaseUrl });
+  if (!client) await ownedClient.connect();
+  await ownedClient.query('SET ROLE balancevault_runtime');
+  try {
+    const requestHash = canonicalRequestHash({ type, sourceAccountId, destinationAccountId, amountPaise });
+    const { rows: [result] } = await ownedClient.query(
+      `SELECT * FROM public.balancevault_post_transaction(
+        $1::uuid,$2::public."JournalTransactionType",$3::uuid,$4::uuid,$5::bigint,$6::text,$7::char(64)
+      )`,
+      [actorId, type, sourceAccountId, destinationAccountId, amountPaise.toString(), idempotencyKey, requestHash],
+    );
+    return result;
+  } finally {
+    if (!client) await ownedClient.end();
+  }
+}
+
 async function balance(accountId) {
   const { rows } = await admin.query('SELECT "balancePaise" FROM public."Account" WHERE id=$1', [accountId]);
   return BigInt(rows[0].balancePaise);
+}
+
+async function customerBalanceTotal(accountIds) {
+  const { rows: [{ total }] } = await admin.query(
+    `SELECT COALESCE(sum("balancePaise"),0)::text AS total
+       FROM public."Account" WHERE id=ANY($1::uuid[])`,
+    [accountIds],
+  );
+  return BigInt(total);
+}
+
+async function journalPostings(journalId) {
+  const { rows } = await admin.query(
+    'SELECT "amountPaise" FROM public."LedgerEntry" WHERE "journalTransactionId"=$1 ORDER BY "postingSequence"',
+    [journalId],
+  );
+  return rows.map(({ amountPaise }) => BigInt(amountPaise));
+}
+
+async function waitForDatabaseLock(pid, timeoutMillis = 5000) {
+  const deadline = Date.now() + timeoutMillis;
+  while (Date.now() < deadline) {
+    const { rows: [activity] } = await admin.query(
+      'SELECT wait_event_type FROM pg_catalog.pg_stat_activity WHERE pid=$1', [pid],
+    );
+    if (activity?.wait_event_type === 'Lock') return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Posting connection did not reach the expected account-row lock wait.');
 }
 
 before(async () => {
@@ -311,4 +390,46 @@ test('financial HTTP endpoints persist through the PostgreSQL runtime role', {
       FROM public."LedgerEntry" WHERE "journalTransactionId"=$1`, [transferResult.journalTransactionId]);
   assert.equal(Number(journalIntegrity.rows[0].postings), 2);
   assert.equal(BigInt(journalIntegrity.rows[0].total), 0n);
+
+  const transferRace = await createFinancialFixture(3);
+  const [transferSource, transferDestinationA, transferDestinationB] = transferRace.accountIds;
+  await postDatabaseTransaction({ actorId: transferRace.userId, type: 'DEPOSIT', destinationAccountId: transferSource, amountPaise: 1000n, idempotencyKey: 'transfer-race-funding' });
+  const competingTransfers = await Promise.all([
+    postDatabaseTransaction({ actorId: transferRace.userId, type: 'TRANSFER', sourceAccountId: transferSource, destinationAccountId: transferDestinationA, amountPaise: 700n, idempotencyKey: 'transfer-race-a' }),
+    postDatabaseTransaction({ actorId: transferRace.userId, type: 'TRANSFER', sourceAccountId: transferSource, destinationAccountId: transferDestinationB, amountPaise: 700n, idempotencyKey: 'transfer-race-b' }),
+  ]);
+  assert.deepEqual(competingTransfers.map(({ response_status }) => response_status).sort(), [201, 422]);
+  assert.equal(await balance(transferSource), 300n);
+  assert.equal((await balance(transferDestinationA)) + (await balance(transferDestinationB)), 700n);
+  assert.equal(await customerBalanceTotal(transferRace.accountIds), 1000n);
+  const winningTransfer = competingTransfers.find(({ response_status }) => response_status === 201);
+  const concurrentJournal = await journalPostings(winningTransfer.response_body.journalTransactionId);
+  assert.equal(concurrentJournal.length, 2);
+  assert.equal(concurrentJournal.reduce((total, amount) => total + amount, 0n), 0n);
+
+  const freezeRace = await createFinancialFixture(2);
+  const [freezeSource] = freezeRace.accountIds;
+  await postDatabaseTransaction({ actorId: freezeRace.userId, type: 'DEPOSIT', destinationAccountId: freezeSource, amountPaise: 1000n, idempotencyKey: 'freeze-race-funding' });
+  const blockedRuntime = new Client({ connectionString: runtimeDatabaseUrl });
+  await blockedRuntime.connect();
+  await blockedRuntime.query('SET ROLE balancevault_runtime');
+  let freezeTransactionOpen = false;
+  try {
+    await admin.query('BEGIN');
+    freezeTransactionOpen = true;
+    await admin.query('UPDATE public."Account" SET status=\'FROZEN\' WHERE id=$1', [freezeSource]);
+    const { rows: [{ pid }] } = await blockedRuntime.query('SELECT pg_catalog.pg_backend_pid() AS pid');
+    const posting = postDatabaseTransaction({ actorId: freezeRace.userId, type: 'WITHDRAWAL', sourceAccountId: freezeSource, amountPaise: 100n, idempotencyKey: 'freeze-race-withdrawal' }, blockedRuntime);
+    await waitForDatabaseLock(pid);
+    await admin.query('COMMIT');
+    freezeTransactionOpen = false;
+    const refused = await posting;
+    assert.equal(refused.response_status, 409);
+    assert.equal(refused.response_body.reason, 'account_unavailable');
+    assert.equal(await balance(freezeSource), 1000n);
+  } finally {
+    if (freezeTransactionOpen) await admin.query('ROLLBACK');
+    await blockedRuntime.end();
+  }
+
 });
